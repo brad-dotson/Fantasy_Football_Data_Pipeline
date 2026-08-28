@@ -99,3 +99,9 @@ Not useful for current platform-ADP problem:
 ## Caching strategy
 - Save successful API responses under `data/raw/`.
 - Develop transformations against cached JSON instead of repeatedly calling the API.
+
+### Raw cache filenames
+- Production extraction code (`src/fantasy_football/extract/fantasypros.py`) writes the
+  consensus ADP pull to `fantasypros_consensus_adp_2026_half.json`.
+- `fantasypros_adp_2026_half.json` is a legacy/sandbox name from notebook
+  experimentation. Do not rely on it for production; it can be removed later.

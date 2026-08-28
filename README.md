@@ -90,6 +90,18 @@ APIs → raw storage / AWS → transformation layer → Databricks → analytics
 - `data/processed/` - transformed datasets
 - `outputs/` - generated draft-preparation files (not committed)
 
+## Setup
+
+The pipeline code lives in `src/` (src layout). Install it in editable mode so
+`import fantasy_football...` works from notebooks, scripts, and tests:
+
+```
+python -m pip install -e .
+```
+
+Packaging metadata is in `pyproject.toml`. `requirements.txt` is kept for
+convenience but the editable install already pulls the runtime dependencies.
+
 ## Development Principles
 
 - Never commit API keys or credentials.

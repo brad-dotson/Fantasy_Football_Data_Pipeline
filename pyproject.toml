@@ -1,0 +1,31 @@
+# Minimal modern packaging config.
+#
+# Purpose: make the `src/fantasy_football` package importable via an editable
+# install (`python -m pip install -e .`) so `import fantasy_football...` works
+# from notebooks, scripts, and tests without sys.path hacks.
+#
+# Intentionally minimal: no linters, no formatters, no optional-dependency
+# groups. Add those later only if the project actually needs them.
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fantasy-football-data-pipeline"
+version = "0.1.0"
+description = "Personal data pipeline for 2026 fantasy football draft prep (half-PPR)."
+readme = "README.md"
+requires-python = ">=3.11"
+
+# Runtime dependencies actually imported by src/fantasy_football.
+# Kept unpinned here (like requirements.txt) since this is a personal project.
+dependencies = [
+    "requests",
+    "python-dotenv",
+]
+
+# src/ layout: tell setuptools to look for packages under src/ only.
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["fantasy_football*"]
