@@ -69,13 +69,15 @@ Primary:
 Consensus rankings define the primary draft-board universe, while other datasets enrich it via left joins.
 
 Additional sources may be added where FantasyPros does not provide required
-data, particularly platform-specific ADP. Source-specific FantasyPros ADP
-access is currently under investigation; see `docs/fantasypros_api_notes.md`.
+data, particularly platform-specific ADP and draft-day injury / availability context.
+Source-specific FantasyPros ADP access is currently under investigation; see
+`docs/fantasypros_api_notes.md`.
 
 Current FantasyPros ingestion status:
+- 2026 consensus rankings / Half-PPR ADP: productionized
 - 2026 preseason projections: productionized
-- 2025 season-long Half-PPR player points: validated in sandbox; next to productionize
-- 2026 injury data: next exploration target
+- 2025 season-long Half-PPR player points: productionized
+- 2026 injury data: explored and rejected for v1 due to sparse / low-value preseason coverage
 - Platform-specific ADP: pending FantasyPros support guidance (awaiting email response)
 
 ## Architecture

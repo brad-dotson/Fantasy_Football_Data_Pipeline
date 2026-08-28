@@ -1,5 +1,5 @@
 # FantasyPros API Notes
-Current API implementation notes as of 8/28/26. Core FantasyPros extraction is working; platform-specific ADP remains under investigation.
+Current API implementation notes as of 8/28/26. Core FantasyPros extraction is working for consensus rankings, preseason projections, and historical player points. The injuries endpoint was evaluated and rejected for v1; platform-specific ADP remains under investigation.
 
 ## Access
 - HOF subscription enables premium API access.
@@ -200,12 +200,59 @@ Notes:
 - This is acceptable because the historical response is used as a lookup/enrichment source, not as the primary player universe.
 - Weekly values under `weeks` should remain in the raw cache but are not needed in the primary season-long draft spreadsheet.
 
+## Injuries endpoint
+
+### 2026 preseason exploration
+`GET /nfl/injuries`
+
+Purpose explored:
+- Determine whether FantasyPros injury data could provide useful preseason
+  draft-day injury / availability context for the 2026 player universe
+
+Parameters tested:
+- `year=2026`
+- `week=0`
+
+Observed response:
+- 17 injury records
+- `tier=premium`
+- Relevant fields included:
+  - `player_id`
+  - `name`
+  - `team_id`
+  - `position_id`
+  - `status`
+  - `status_short`
+  - `injury_type`
+  - `comment`
+  - `injury_update_date`
+  - `ir_weeks`
+  - `probability_of_playing`
+  - practice-report fields
+
+Observed limitations:
+- Coverage was very sparse for preseason draft purposes
+- Many records represented recently retired or free-agent players rather than
+  actionable fantasy draft injuries
+- Other records captured high-profile players already known to be out for most
+  or all of the season
+- `probability_of_playing` was not populated in the explored response
+- The endpoint did not provide broader draft-availability context such as suspensions
+- Overall, the endpoint behaved more like a narrow player-unavailability /
+  status feed than a comprehensive preseason injury-risk dataset
+
+Decision:
+- Do not productionize this endpoint for v1
+- Do not add injury fields to the primary draft board from this source
+- Current injury / suspension context can be handled through manual research
+  closer to draft time unless a better structured source is identified later
+
 ## Caching strategy
 - Save successful API responses under `data/raw/`.
 - Develop transformations against cached JSON instead of repeatedly calling the API.
 - Production projection cache:
   `fantasypros_projections_2026.json`
-- Planned production 2025 player-points cache:
+- Production 2025 player-points cache:
   `fantasypros_player_points_2025_half.json`
 
 ### Raw cache filenames
@@ -218,3 +265,8 @@ Notes:
   at request time.
 - `fantasypros_adp_2026_half.json` is a legacy/sandbox name from notebook
   experimentation. Do not rely on it for production; it can be removed later.
+  - The same module writes the 2025 Half-PPR player-points pull to
+  `fantasypros_player_points_2025_half.json`
+  (exported as `PLAYER_POINTS_RAW_FILENAME`).
+  The `_half` suffix is retained because scoring is selected at request time
+  for the player-points endpoint.
