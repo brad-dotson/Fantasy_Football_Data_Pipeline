@@ -4,13 +4,13 @@ A personal data engineering project for collecting, transforming, and analyzing
 fantasy football data.
 
 The immediate goal is to generate a useful draft-preparation dataset for the
-2026 NFL fantasy football season. The longer-term goal is to use the project
+2026 NFL fantasy football season using half-PPR scoring data. The longer-term goal is to use the project
 to practice modern data engineering and analytics workflows using Python,
 APIs, AWS, databases, and Databricks.
 
 ## Current Goals - v1
 
-Build a consolidated, player-level dataset for the 2026 fantasy football draft containing, where available:
+Build a consolidated, player-level dataset for the 2026 fantasy football half-PPR scoring draft containing, where available:
 
 - Player name
 - Current NFL team
@@ -58,6 +58,8 @@ maintained fields can then be added for v1.
 Primary:
 - FantasyPros Public API v2
     - Fantasy Pros API Docs: https://api.fantasypros.com/public/v2/docs 
+    - We are using Half-PPR Fantasy scoring
+    - Requires a paid HOF subscription on Fantasy Pros (~$23/month in 2026)
 
 Additional sources may be added where FantasyPros does not provide required
 data, particularly platform-specific ADP.
