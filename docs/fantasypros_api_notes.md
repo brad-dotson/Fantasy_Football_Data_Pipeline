@@ -147,11 +147,16 @@ Potential future use:
 ## Caching strategy
 - Save successful API responses under `data/raw/`.
 - Develop transformations against cached JSON instead of repeatedly calling the API.
-- Planned production projection cache:
+- Production projection cache:
   `fantasypros_projections_2026.json`
 
 ### Raw cache filenames
 - Production extraction code (`src/fantasy_football/extract/fantasypros.py`) writes the
   consensus ADP pull to `fantasypros_consensus_adp_2026_half.json`.
+- The same module writes the preseason projections pull to
+  `fantasypros_projections_2026.json` (exported as `PROJECTIONS_RAW_FILENAME`).
+  No `_half` suffix: the projections payload carries `points`, `points_ppr` and
+  `points_half` together under each player's `stats`, so scoring is not chosen
+  at request time.
 - `fantasypros_adp_2026_half.json` is a legacy/sandbox name from notebook
   experimentation. Do not rely on it for production; it can be removed later.

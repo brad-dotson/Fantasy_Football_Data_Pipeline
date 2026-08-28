@@ -18,8 +18,13 @@ Key facts driving this module (from the API notes + notebook exploration):
   response (via :func:`save_raw_response`) and develop against the cached
   JSON instead of re-calling the API.
 
+A second endpoint -- ``GET /nfl/<season>/projections`` (2026 preseason /
+season-long projections) -- is also supported via :func:`fetch_projections`.
+It follows the same "pull + cache, no transformation" contract.
+
 The module is designed to be callable from the command line for one-off pulls:
 ./.venv/bin/python -c "from fantasy_football.extract.fantasypros import fetch_consensus_adp, save_raw_response; save_raw_response(fetch_consensus_adp())"
+./.venv/bin/python -c "from fantasy_football.extract.fantasypros import fetch_projections, save_raw_response, PROJECTIONS_RAW_FILENAME; save_raw_response(fetch_projections(), filename=PROJECTIONS_RAW_FILENAME)"
 
 """
 
@@ -39,7 +44,9 @@ __all__ = [
     "DEFAULT_SEASON",
     "DEFAULT_TIMEOUT",
     "DEFAULT_RAW_DIR",
+    "PROJECTIONS_RAW_FILENAME",
     "fetch_consensus_adp",
+    "fetch_projections",
     "save_raw_response",
 ]
 
@@ -84,6 +91,29 @@ _CONSENSUS_ADP_PARAMS = {
     "type": "ADP",
     "scoring": "HALF",
 }
+
+#: Query parameters for the 2026 preseason (season-long) projections pull.
+#:
+#: * ``week=0`` selects preseason / season-long projections (a real week number
+#:   would return that week's projection instead).
+#: * ``position=ALL`` returns every position (QB/RB/WR/TE/K/DST) in one payload.
+#:
+#: No ``scoring`` param is sent on purpose. Per
+#: ``docs/fantasypros_api_notes.md`` the endpoint's *top-level* ``scoring`` was
+#: observed as ``STD`` regardless of what was requested, so it is not a
+#: reliable Half-PPR signal. Every player record instead carries per-format
+#: point fields under ``stats`` (``points``, ``points_ppr``, ``points_half``);
+#: the transformation layer reads ``stats["points_half"]`` from there.
+_PROJECTIONS_PARAMS = {
+    "week": 0,
+    "position": "ALL",
+}
+
+#: Production raw-cache filename for the projections pull. Mirrors the inline
+#: default used by :func:`save_raw_response` for the consensus pull, but the
+#: projections endpoint has no ``scoring`` suffix because Half-PPR points live
+#: inside each player's ``stats`` rather than being selected per request.
+PROJECTIONS_RAW_FILENAME = f"fantasypros_projections_{DEFAULT_SEASON}.json"
 
 
 def _load_dotenv_if_available() -> None:
@@ -175,6 +205,72 @@ def fetch_consensus_adp(
     # Turn any non-2xx response into a raised HTTPError. The generated message
     # contains the URL and status code but not the request headers, so the
     # API key is not exposed.
+    response.raise_for_status()
+
+    return response.json()
+
+
+def fetch_projections(
+    season: int = DEFAULT_SEASON,
+    *,
+    timeout: float | tuple[float, float] = DEFAULT_TIMEOUT,
+) -> dict[str, Any]:
+    """Call the ``projections`` endpoint and return the parsed JSON.
+
+    Uses ``week=0`` (preseason / season-long) and ``position=ALL`` -- i.e. the
+    full 2026 preseason projection set for every position in a single payload.
+
+    Parameters
+    ----------
+    season:
+        NFL season year (path segment). Defaults to :data:`DEFAULT_SEASON`.
+    timeout:
+        ``requests`` timeout, in seconds. Either a single float or a
+        ``(connect, read)`` tuple. Defaults to :data:`DEFAULT_TIMEOUT`.
+
+    Returns
+    -------
+    dict
+        The parsed JSON response body exactly as returned by the API. No
+        transformation, flattening, renaming, filtering or merging is applied.
+
+    Raises
+    ------
+    FantasyProsConfigError
+        If the API key environment variable is not set.
+    requests.HTTPError
+        If the API responds with a non-2xx status code.
+    requests.RequestException
+        For lower-level problems (connection errors, timeouts, etc.).
+
+    Notes
+    -----
+    * The response's *top-level* ``scoring`` field is **not** authoritative for
+      Half-PPR -- it has been observed as ``STD`` regardless of request
+      params. Each player's ``stats`` dict carries ``points``, ``points_ppr``
+      and ``points_half``; downstream code should read
+      ``stats["points_half"]`` for the Half-PPR draft dataset.
+    * Like :func:`fetch_consensus_adp`, this performs a real, rate-limited API
+      call (~500/day premium limit). Call it once and cache via
+      :func:`save_raw_response` (pass
+      ``filename=PROJECTIONS_RAW_FILENAME``), then develop against the cache.
+    """
+
+    api_key = _get_api_key()
+
+    url = f"{BASE_URL}/nfl/{season}/projections"
+    # The key travels only in this header dict; we never log `headers`.
+    headers = {"x-api-key": api_key}
+
+    response = requests.get(
+        url,
+        headers=headers,
+        params=_PROJECTIONS_PARAMS,
+        timeout=timeout,
+    )
+
+    # Non-2xx -> raised HTTPError. Message carries the URL + status code but
+    # not the request headers, so the API key is not exposed.
     response.raise_for_status()
 
     return response.json()
