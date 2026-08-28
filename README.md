@@ -72,11 +72,11 @@ Additional sources may be added where FantasyPros does not provide required
 data, particularly platform-specific ADP. Source-specific FantasyPros ADP
 access is currently under investigation; see `docs/fantasypros_api_notes.md`.
 
-Current FantasyPros ingestion priorities:
-1. 2026 preseason projections
-2. 2025 season-long Half-PPR player points
-3. 2026 injury data
-4. Platform-specific ADP, pending FantasyPros API support guidance (awaiting email response)
+Current FantasyPros ingestion status:
+- 2026 preseason projections: productionized
+- 2025 season-long Half-PPR player points: validated in sandbox; next to productionize
+- 2026 injury data: next exploration target
+- Platform-specific ADP: pending FantasyPros support guidance (awaiting email response)
 
 ## Architecture
 

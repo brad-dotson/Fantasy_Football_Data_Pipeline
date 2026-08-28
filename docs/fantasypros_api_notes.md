@@ -144,11 +144,69 @@ Potential future use:
 - Keep those in the raw cache for future position-specific tabs, but do not add
   them to the primary draft-day dataset yet
 
+## Historical player points
+
+### 2025 season-long Half-PPR player points
+`GET /nfl/2025/player-points`
+
+Purpose:
+- Add prior-season performance context to the 2026 draft board
+- Primary v1 fields:
+  - `2025_games_played`
+  - `2025_points_half`
+  - `2025_ppg_half`
+
+Working parameters:
+- `position=ALL`
+- `scoring=HALF`
+- `start=1`
+- `end=18`
+
+Observed response:
+- `season=2025`
+- `scoring=HALF`
+- ~2166 player records
+- `tier=premium`
+
+Relevant player fields observed:
+- `player_id`
+- `player_name`
+- `position_id`
+- `team_id`
+- `games`
+- `points`
+- `average`
+- `weeks`
+
+Field mapping for the primary draft dataset:
+- `games` → `2025_games_played`
+- `points` → `2025_points_half`
+- `average` → `2025_ppg_half`
+
+Join validation:
+- Join key is `player_id`
+- 272 of 340 consensus-ranking players (80%) had matching 2025 player-points records
+- Missing players were consistent with expected year-over-year turnover, especially:
+  - 2026 rookies
+  - players who did not produce applicable 2025 NFL fantasy data
+  - fringe/free-agent players
+- Known 2025 veteran stars were confirmed present
+- Use the consensus player dataset as the primary player universe and LEFT JOIN 2025 player-points onto it
+- Do not drop players with missing 2025 history
+- Do not fill missing historical values with zero; missing means no applicable 2025 performance record was found
+
+Notes:
+- The endpoint returns a much broader historical universe (~2166 records) than the 2026 draft board.
+- This is acceptable because the historical response is used as a lookup/enrichment source, not as the primary player universe.
+- Weekly values under `weeks` should remain in the raw cache but are not needed in the primary season-long draft spreadsheet.
+
 ## Caching strategy
 - Save successful API responses under `data/raw/`.
 - Develop transformations against cached JSON instead of repeatedly calling the API.
 - Production projection cache:
   `fantasypros_projections_2026.json`
+- Planned production 2025 player-points cache:
+  `fantasypros_player_points_2025_half.json`
 
 ### Raw cache filenames
 - Production extraction code (`src/fantasy_football/extract/fantasypros.py`) writes the
