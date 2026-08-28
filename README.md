@@ -19,12 +19,17 @@ Build a consolidated, player-level dataset for the 2026 fantasy football half-PP
 - FantasyPros consensus / expert ranking
 - Consensus ADP
 - Platform-specific ADP:
-  - ESPN
-  - Yahoo
-  - Sleeper
-  - RTSports
+  - Yahoo (Half-PPR)
+  - Sleeper (Half-PPR)
+  - RTSports (Half-PPR)
+  - ESPN (PPR; explicitly labeled as such)
 - 2025 fantasy points / points per game
 - 2026 projected fantasy points
+- FantasyPros Half-PPR ECR (expert consensus ranking)
+- Consensus Half-PPR ADP
+- ECR / ranking range and variability
+- FantasyPros overall and positional tiers
+- ADP vs. ECR
 - Other useful draft-ranking or projection fields discovered during development
 
 Manual / user-maintained fields may include:
@@ -62,7 +67,8 @@ Primary:
     - Requires a paid HOF subscription on Fantasy Pros (~$23/month in 2026)
 
 Additional sources may be added where FantasyPros does not provide required
-data, particularly platform-specific ADP.
+data, particularly platform-specific ADP. Source-specific FantasyPros ADP
+access is currently under investigation; see `docs/fantasypros_api_notes.md`.
 
 ## Architecture
 
@@ -76,7 +82,9 @@ APIs → raw storage / AWS → transformation layer → Databricks → analytics
 
 ## Project Structure
 
-- `notebooks/` - exploration and development
+- `docs/` - project and API documentation
+- `notebooks/` - exploratory analysis and API experimentation
+- `reference/` - historical/reference artifacts from prior implementations
 - `src/` - reusable Python pipeline code
 - `data/raw/` - cached raw API responses (not committed)
 - `data/processed/` - transformed datasets
