@@ -1,5 +1,5 @@
 # FantasyPros API Notes
-Still troubleshooting the API as of 8/27/26 - these are the latest notes. 
+Current API implementation notes as of 8/28/26. Core FantasyPros extraction is working; platform-specific ADP remains under investigation.
 
 ## Access
 - HOF subscription enables premium API access.
@@ -96,9 +96,59 @@ Not useful for current platform-ADP problem:
 - Normal redraft Yahoo/Sleeper/RTSports ADP was not exposed directly.
 - `ADP -> BB-HALF` appears to be Best Ball ADP.
 
+## Preseason projections
+
+### 2026 season-long projections
+`GET /nfl/2026/projections`
+
+Purpose:
+- Season-long 2026 preseason projections
+- Primary v1 field for the consolidated draft board: Half-PPR projected fantasy points
+- Preserve the full raw projection payload for potential future position-specific analysis
+
+Working parameters:
+- `week=0` for preseason / season-long projections
+- `position=ALL`
+
+Observed response:
+- ~603 players
+- Positions include QB, RB, WR, TE, K, DST
+- `tier=premium`
+- Top-level `scoring` was observed as `STD` even when `scoring=HALF` was supplied
+- Player records include separate scoring fields in `stats`, including:
+  - `points`
+  - `points_ppr`
+  - `points_half`
+- Use `stats["points_half"]` for the primary Half-PPR draft dataset
+
+Important schema differences from consensus rankings:
+- Consensus `player_id` corresponds to projection `fpid`
+- Consensus `player_name` corresponds to projection `name`
+- Consensus `player_team_id` corresponds to projection `team_id`
+- Consensus `player_position_id` corresponds to projection `position_id`
+
+Join validation:
+- `player_id` / `fpid` was confirmed on individual players and across the dataset
+- 301 of 340 consensus-ranking players (~88.5%) had a matching projection record
+- Missing projection records were largely inactive/free-agent/non-relevant players from the broader ranking universe
+- Use the consensus player dataset as the primary player universe and LEFT JOIN projections onto it
+- Do not drop players with missing projections
+- Do not fill missing projections with zero; missing means no projection was provided
+
+Primary downstream field:
+- `projected_points_half`
+
+Potential future use:
+- Raw projection records also contain position-specific projected stats
+  (e.g. receptions, rushing attempts/yards, passing stats)
+- Keep those in the raw cache for future position-specific tabs, but do not add
+  them to the primary draft-day dataset yet
+
 ## Caching strategy
 - Save successful API responses under `data/raw/`.
 - Develop transformations against cached JSON instead of repeatedly calling the API.
+- Planned production projection cache:
+  `fantasypros_projections_2026.json`
 
 ### Raw cache filenames
 - Production extraction code (`src/fantasy_football/extract/fantasypros.py`) writes the

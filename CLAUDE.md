@@ -27,3 +27,4 @@ This project serves two purposes:
 - During early exploration, notebooks are appropriate.
 - Move stable/reusable logic into `src/` as the project matures.
 - Read `docs/fantasypros_api_notes.md` before changing FantasyPros ingestion logic.
+- Treat the consensus rankings dataset as the primary player universe; enrich it with other FantasyPros datasets using left joins unless there is a strong reason to do otherwise.

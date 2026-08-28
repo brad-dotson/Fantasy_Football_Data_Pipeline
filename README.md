@@ -66,9 +66,17 @@ Primary:
     - We are using Half-PPR Fantasy scoring
     - Requires a paid HOF subscription on Fantasy Pros (~$23/month in 2026)
 
+Consensus rankings define the primary draft-board universe, while other datasets enrich it via left joins.
+
 Additional sources may be added where FantasyPros does not provide required
 data, particularly platform-specific ADP. Source-specific FantasyPros ADP
 access is currently under investigation; see `docs/fantasypros_api_notes.md`.
+
+Current FantasyPros ingestion priorities:
+1. 2026 preseason projections
+2. 2025 season-long Half-PPR player points
+3. 2026 injury data
+4. Platform-specific ADP, pending FantasyPros API support guidance (awaiting email response)
 
 ## Architecture
 
