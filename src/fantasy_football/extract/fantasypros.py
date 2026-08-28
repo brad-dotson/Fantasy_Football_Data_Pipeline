@@ -22,9 +22,16 @@ A second endpoint -- ``GET /nfl/<season>/projections`` (2026 preseason /
 season-long projections) -- is also supported via :func:`fetch_projections`.
 It follows the same "pull + cache, no transformation" contract.
 
+A third endpoint -- ``GET /nfl/<season>/player-points`` (2025 season-long
+Half-PPR actual fantasy points) -- is supported via :func:`fetch_player_points`.
+It defaults to the 2025 season because it is consumed only as prior-season
+context for the 2026 draft dataset, and it follows the same "pull + cache, no
+transformation" contract.
+
 The module is designed to be callable from the command line for one-off pulls:
 ./.venv/bin/python -c "from fantasy_football.extract.fantasypros import fetch_consensus_adp, save_raw_response; save_raw_response(fetch_consensus_adp())"
 ./.venv/bin/python -c "from fantasy_football.extract.fantasypros import fetch_projections, save_raw_response, PROJECTIONS_RAW_FILENAME; save_raw_response(fetch_projections(), filename=PROJECTIONS_RAW_FILENAME)"
+./.venv/bin/python -c "from fantasy_football.extract.fantasypros import fetch_player_points, save_raw_response, PLAYER_POINTS_RAW_FILENAME; save_raw_response(fetch_player_points(), filename=PLAYER_POINTS_RAW_FILENAME)"
 
 """
 
@@ -45,8 +52,11 @@ __all__ = [
     "DEFAULT_TIMEOUT",
     "DEFAULT_RAW_DIR",
     "PROJECTIONS_RAW_FILENAME",
+    "PLAYER_POINTS_SEASON",
+    "PLAYER_POINTS_RAW_FILENAME",
     "fetch_consensus_adp",
     "fetch_projections",
+    "fetch_player_points",
     "save_raw_response",
 ]
 
@@ -114,6 +124,34 @@ _PROJECTIONS_PARAMS = {
 #: projections endpoint has no ``scoring`` suffix because Half-PPR points live
 #: inside each player's ``stats`` rather than being selected per request.
 PROJECTIONS_RAW_FILENAME = f"fantasypros_projections_{DEFAULT_SEASON}.json"
+
+#: NFL season pulled by :func:`fetch_player_points`. This is *not*
+#: :data:`DEFAULT_SEASON` (2026): the ``player-points`` endpoint returns actual
+#: scored fantasy points, so it is only meaningful for a completed season and is
+#: consumed purely as prior-season context for the 2026 draft board.
+PLAYER_POINTS_SEASON = 2025
+
+#: Query parameters for the 2025 season-long Half-PPR player-points pull.
+#:
+#: * ``position=ALL`` returns every position in one payload.
+#: * ``scoring=HALF`` selects the half-PPR point totals (the league format).
+#:   Unlike the projections endpoint, ``player-points`` honours this and echoes
+#:   ``scoring=HALF`` back in the response.
+#: * ``start=1`` / ``end=18`` covers the full 18-week NFL regular season so the
+#:   totals are true season-long numbers.
+_PLAYER_POINTS_PARAMS = {
+    "position": "ALL",
+    "scoring": "HALF",
+    "start": 1,
+    "end": 18,
+}
+
+#: Production raw-cache filename for the player-points pull. Carries the
+#: ``_half`` suffix because scoring *is* chosen at request time for this
+#: endpoint (contrast :data:`PROJECTIONS_RAW_FILENAME`).
+PLAYER_POINTS_RAW_FILENAME = (
+    f"fantasypros_player_points_{PLAYER_POINTS_SEASON}_half.json"
+)
 
 
 def _load_dotenv_if_available() -> None:
@@ -266,6 +304,78 @@ def fetch_projections(
         url,
         headers=headers,
         params=_PROJECTIONS_PARAMS,
+        timeout=timeout,
+    )
+
+    # Non-2xx -> raised HTTPError. Message carries the URL + status code but
+    # not the request headers, so the API key is not exposed.
+    response.raise_for_status()
+
+    return response.json()
+
+
+def fetch_player_points(
+    season: int = PLAYER_POINTS_SEASON,
+    *,
+    timeout: float | tuple[float, float] = DEFAULT_TIMEOUT,
+) -> dict[str, Any]:
+    """Call the ``player-points`` endpoint and return the parsed JSON.
+
+    Uses ``position=ALL``, ``scoring=HALF``, ``start=1``, ``end=18`` -- i.e. the
+    full-season half-PPR *actual* fantasy points for every position in a single
+    payload.
+
+    Parameters
+    ----------
+    season:
+        NFL season year (path segment). Defaults to
+        :data:`PLAYER_POINTS_SEASON` (2025), **not** :data:`DEFAULT_SEASON`.
+        This endpoint returns points that were actually scored, so it is only
+        meaningful for a completed season; the 2026 draft board consumes it as
+        prior-season context.
+    timeout:
+        ``requests`` timeout, in seconds. Either a single float or a
+        ``(connect, read)`` tuple. Defaults to :data:`DEFAULT_TIMEOUT`.
+
+    Returns
+    -------
+    dict
+        The parsed JSON response body exactly as returned by the API. No
+        transformation, flattening, renaming, filtering or merging is applied --
+        including the per-week values under each player's ``weeks`` key, which
+        are preserved verbatim in the cache.
+
+    Raises
+    ------
+    FantasyProsConfigError
+        If the API key environment variable is not set.
+    requests.HTTPError
+        If the API responds with a non-2xx status code.
+    requests.RequestException
+        For lower-level problems (connection errors, timeouts, etc.).
+
+    Notes
+    -----
+    * The response echoes ``season`` and ``scoring`` (observed as ``2025`` /
+      ``HALF``) and carries a much broader universe (~2166 players) than the
+      2026 consensus draft board. That is expected: it is an enrichment /
+      lookup source joined on ``player_id``, not the primary player universe.
+    * Like the other ``fetch_*`` helpers this performs a real, rate-limited API
+      call (~500/day premium limit). Call it once and cache via
+      :func:`save_raw_response` (pass ``filename=PLAYER_POINTS_RAW_FILENAME``),
+      then develop against the cache.
+    """
+
+    api_key = _get_api_key()
+
+    url = f"{BASE_URL}/nfl/{season}/player-points"
+    # The key travels only in this header dict; we never log `headers`.
+    headers = {"x-api-key": api_key}
+
+    response = requests.get(
+        url,
+        headers=headers,
+        params=_PLAYER_POINTS_PARAMS,
         timeout=timeout,
     )
 
