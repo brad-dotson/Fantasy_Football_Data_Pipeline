@@ -1,5 +1,5 @@
 # FantasyPros API Notes
-Current API implementation notes as of 8/28/26. Core FantasyPros extraction is working for consensus rankings, preseason projections, and historical player points. The injuries endpoint was evaluated and rejected for v1; platform-specific ADP remains under investigation.
+Current API implementation notes as of 8/28/26. Core FantasyPros extraction is working for consensus rankings, preseason projections, and historical player points. The injuries endpoint was evaluated and rejected for v1.
 
 ## Access
 - HOF subscription enables premium API access.
@@ -43,37 +43,128 @@ Relevant player fields observed:
 - `pos_rank`
 - `tier`
 
-## ADP sources
+## Platform-specific ADP
 
-Half-PPR consensus currently uses three provider IDs:
-- `236`
-- `439`
-- `4350`
+FantasyPros support confirmed that individual platform ADP values are included
+within each player record returned by `consensus-rankings` when `experts=show`
+is supplied.
 
-Known:
-- `4350` = Sleeper (`SleeperHQ` metadata)
+The values are stored in each player's `experts` dictionary, keyed by
+FantasyPros expert/source ID.
 
-Expected Half-PPR website sources:
-- Yahoo
-- Sleeper
-- RTSports
+Confirmed source IDs:
+- `236` = Yahoo
+- `439` = RTSports
+- `79` = ESPN
+- `80` = CBS
+- `624` = Fantrax
+- `4350` = Sleeper
 
-Open issue:
-- `filters=<source_id>` on `consensus-rankings` did not isolate an individual provider.
-- API returned all three source IDs regardless.
-- Support contacted for source-specific ADP access.
+### Half-PPR platform ADP
 
-Desired eventual fields:
-- `FP_ADP_HALF`
+`GET /nfl/2026/consensus-rankings`
+
+Working parameters:
+- `position=ALL`
+- `type=ADP`
+- `scoring=HALF`
+- `experts=show`
+
+Observed Half-PPR sources:
+- `236` = Yahoo
+- `439` = RTSports
+- `4350` = Sleeper
+
+Example player-level structure:
+
+```python
+"experts": {
+    "236": "4",
+    "439": "4",
+    "4350": "6"
+}
+```
+
+FantasyPros support confirmed:
+- Yahoo ADP is available only as Half-PPR.
+- Yahoo, RTSports, and Sleeper values from this response can therefore provide
+  the desired Half-PPR platform-specific ADP fields.
+
+Desired downstream fields:
 - `Yahoo_ADP_HALF`
-- `Sleeper_ADP_HALF`
 - `RTSports_ADP_HALF`
-- `ESPN_ADP_PPR`
+- `Sleeper_ADP_HALF`
 
-Important scoring note:
-- ESPN ADP is PPR.
-- Yahoo ADP is Half-PPR.
-- Prefer Half-PPR data for all other fields where available.
+### ESPN PPR ADP
+
+ESPN uses PPR as its default scoring format and FantasyPros support confirmed
+that ESPN ADP is available only under PPR scoring.
+
+Working parameters:
+- `position=ALL`
+- `type=ADP`
+- `scoring=PPR`
+- `experts=show`
+
+Observed PPR response:
+- 699 players
+- 5 sources
+- Source IDs: `79,80,439,624,4350`
+
+Observed player-level sources:
+- `79` = ESPN
+- `80` = CBS
+- `439` = RTSports
+- `624` = Fantrax
+- `4350` = Sleeper
+
+Use:
+- `experts["79"]` → `ESPN_ADP_PPR`
+
+Important:
+- Do not substitute PPR RTSports or Sleeper values for their Half-PPR values.
+- Use the existing Half-PPR response for Yahoo, RTSports, and Sleeper.
+- Use the PPR response only to enrich the primary dataset with ESPN PPR ADP.
+
+### Join / dataset strategy
+
+The existing 2026 Half-PPR consensus-ranking dataset remains the primary
+draft-board universe.
+
+Platform-specific ADP should be treated as enrichment:
+- Extract Yahoo, RTSports, and Sleeper ADP from the Half-PPR consensus response.
+- Extract ESPN ADP from the PPR consensus response.
+- Join ESPN PPR ADP onto the Half-PPR player universe using `player_id`.
+- Do not expand the primary player universe to the larger PPR response.
+
+### Coverage validation
+
+Platform-specific ADP coverage was validated against the Half-PPR consensus
+ranking dataset, which contained 365 players at the time of testing.
+
+Overall coverage:
+- Yahoo Half-PPR: 224 / 365 (61.4%)
+- RTSports Half-PPR: 298 / 365 (81.6%)
+- Sleeper Half-PPR: 320 / 365 (87.7%)
+- ESPN PPR: 242 / 365 (66.3%)
+
+The lower overall coverage reflects differences in how deeply each platform
+ranks players rather than meaningful missingness among draft-relevant players.
+
+Coverage by ECR:
+- Top 50: 100% across all four platforms
+- Top 100: 100% across all four platforms
+- Top 150: 100% across all four platforms
+- Top 200:
+  - Yahoo: 100%
+  - RTSports: 100%
+  - Sleeper: 100%
+  - ESPN: 96.5%
+
+Conclusion:
+- Platform-specific ADP coverage is sufficient for the v1 draft board.
+- Missing ADP values should remain missing rather than being imputed.
+- No additional investigation is required before productionizing the source.
 
 ## Rankings endpoint
 `GET /nfl/2026/rankings`
