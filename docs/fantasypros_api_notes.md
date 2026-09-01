@@ -348,7 +348,16 @@ Decision:
 
 ### Raw cache filenames
 - Production extraction code (`src/fantasy_football/extract/fantasypros.py`) writes the
-  consensus ADP pull to `fantasypros_consensus_adp_2026_half.json`.
+  Half-PPR consensus ADP pull to `fantasypros_consensus_adp_2026_half.json`.
+  This pull now also sends `experts=show`, so the cached payload carries the
+  nested per-player `experts` dict (Yahoo `236`, RTSports `439`, Sleeper `4350`).
+- The same module writes the PPR consensus ADP pull (`scoring=PPR`,
+  `experts=show`) to `fantasypros_consensus_adp_2026_ppr.json`
+  (exported as `CONSENSUS_ADP_PPR_RAW_FILENAME`). The `_ppr` suffix keeps it
+  beside the Half-PPR cache; scoring is chosen at request time for this
+  endpoint. This response exists only to supply ESPN PPR ADP (`experts["79"]`)
+  during transformation; it is not merged with the Half-PPR universe in the
+  extraction layer.
 - The same module writes the preseason projections pull to
   `fantasypros_projections_2026.json` (exported as `PROJECTIONS_RAW_FILENAME`).
   No `_half` suffix: the projections payload carries `points`, `points_ppr` and

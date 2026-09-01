@@ -12,11 +12,19 @@ Key facts driving this module (from the API notes + notebook exploration):
 
 * Endpoint: ``GET /nfl/<season>/consensus-rankings``
 * Params used for the v1 draft dataset: ``position=ALL``, ``type=ADP``,
-  ``scoring=HALF`` (half-PPR is the league scoring format).
+  ``scoring=HALF`` (half-PPR is the league scoring format), ``experts=show``
+  (so each player record carries a nested ``experts`` dict of platform-specific
+  ADP values -- Yahoo / RTSports / Sleeper for Half-PPR).
 * Auth: an API key passed in the ``x-api-key`` request header.
 * The premium daily request limit is ~500, so callers should cache the raw
   response (via :func:`save_raw_response`) and develop against the cached
   JSON instead of re-calling the API.
+
+The same endpoint is also pulled a second way -- ``scoring=PPR`` instead of
+``scoring=HALF`` -- via :func:`fetch_consensus_adp_ppr`. That response exists
+purely so the transformation layer can enrich the primary Half-PPR player
+universe with ESPN's ADP, which FantasyPros exposes only under PPR scoring. It
+is *not* a second player universe; do not merge it here.
 
 A second endpoint -- ``GET /nfl/<season>/projections`` (2026 preseason /
 season-long projections) -- is also supported via :func:`fetch_projections`.
@@ -30,6 +38,7 @@ transformation" contract.
 
 The module is designed to be callable from the command line for one-off pulls:
 ./.venv/bin/python -c "from fantasy_football.extract.fantasypros import fetch_consensus_adp, save_raw_response; save_raw_response(fetch_consensus_adp())"
+./.venv/bin/python -c "from fantasy_football.extract.fantasypros import fetch_consensus_adp_ppr, save_raw_response, CONSENSUS_ADP_PPR_RAW_FILENAME; save_raw_response(fetch_consensus_adp_ppr(), filename=CONSENSUS_ADP_PPR_RAW_FILENAME)"
 ./.venv/bin/python -c "from fantasy_football.extract.fantasypros import fetch_projections, save_raw_response, PROJECTIONS_RAW_FILENAME; save_raw_response(fetch_projections(), filename=PROJECTIONS_RAW_FILENAME)"
 ./.venv/bin/python -c "from fantasy_football.extract.fantasypros import fetch_player_points, save_raw_response, PLAYER_POINTS_RAW_FILENAME; save_raw_response(fetch_player_points(), filename=PLAYER_POINTS_RAW_FILENAME)"
 
@@ -51,10 +60,12 @@ __all__ = [
     "DEFAULT_SEASON",
     "DEFAULT_TIMEOUT",
     "DEFAULT_RAW_DIR",
+    "CONSENSUS_ADP_PPR_RAW_FILENAME",
     "PROJECTIONS_RAW_FILENAME",
     "PLAYER_POINTS_SEASON",
     "PLAYER_POINTS_RAW_FILENAME",
     "fetch_consensus_adp",
+    "fetch_consensus_adp_ppr",
     "fetch_projections",
     "fetch_player_points",
     "save_raw_response",
@@ -96,11 +107,46 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_RAW_DIR = _REPO_ROOT / "data" / "raw"
 
 #: Query parameters for the half-PPR consensus ADP pull.
+#:
+#: ``experts=show`` makes the API attach a nested ``experts`` dict to every
+#: player record, keyed by FantasyPros source/expert ID. For this Half-PPR
+#: response the draft-relevant keys are ``236`` (Yahoo), ``439`` (RTSports) and
+#: ``4350`` (Sleeper). Those nested values are consumed by the transformation
+#: layer, not here -- this module still returns the raw payload untouched.
 _CONSENSUS_ADP_PARAMS = {
     "position": "ALL",
     "type": "ADP",
     "scoring": "HALF",
+    "experts": "show",
 }
+
+#: Query parameters for the PPR consensus ADP pull.
+#:
+#: Identical to :data:`_CONSENSUS_ADP_PARAMS` except ``scoring=PPR``. This
+#: response is pulled only to source ESPN's ADP (``experts`` key ``79``), which
+#: FantasyPros exposes solely under PPR scoring. The PPR response also carries a
+#: broader player universe (~700 players vs. the Half-PPR board's ~340); the
+#: transformation layer LEFT JOINs ESPN ADP onto the Half-PPR universe by
+#: ``player_id`` and must not adopt this larger universe. RTSports / Sleeper
+#: values in this response are PPR and must not be substituted for their
+#: Half-PPR counterparts from :func:`fetch_consensus_adp`.
+_CONSENSUS_ADP_PPR_PARAMS = {
+    "position": "ALL",
+    "type": "ADP",
+    "scoring": "PPR",
+    "experts": "show",
+}
+
+#: Production raw-cache filename for the PPR consensus ADP pull. Carries a
+#: ``_ppr`` suffix to sit alongside -- and never overwrite -- the Half-PPR
+#: cache (``fantasypros_consensus_adp_<season>_half.json``, still the inline
+#: default of :func:`save_raw_response`). Scoring is chosen at request time for
+#: this endpoint, so the suffix mirrors the ``_half`` one on
+#: :data:`PLAYER_POINTS_RAW_FILENAME` rather than the suffix-less
+#: :data:`PROJECTIONS_RAW_FILENAME`.
+CONSENSUS_ADP_PPR_RAW_FILENAME = (
+    f"fantasypros_consensus_adp_{DEFAULT_SEASON}_ppr.json"
+)
 
 #: Query parameters for the 2026 preseason (season-long) projections pull.
 #:
@@ -194,8 +240,12 @@ def fetch_consensus_adp(
 ) -> dict[str, Any]:
     """Call the ``consensus-rankings`` endpoint and return the parsed JSON.
 
-    Uses ``position=ALL``, ``type=ADP``, ``scoring=HALF`` -- i.e. the
-    half-PPR consensus ADP board for the full player universe.
+    Uses ``position=ALL``, ``type=ADP``, ``scoring=HALF``, ``experts=show``
+    -- i.e. the half-PPR consensus ADP board for the full player universe,
+    with each player record carrying a nested ``experts`` dict of
+    platform-specific ADP values (Yahoo / RTSports / Sleeper for Half-PPR).
+    Those nested values are left untouched here; the transformation layer
+    reads them.
 
     Parameters
     ----------
@@ -243,6 +293,80 @@ def fetch_consensus_adp(
     # Turn any non-2xx response into a raised HTTPError. The generated message
     # contains the URL and status code but not the request headers, so the
     # API key is not exposed.
+    response.raise_for_status()
+
+    return response.json()
+
+
+def fetch_consensus_adp_ppr(
+    season: int = DEFAULT_SEASON,
+    *,
+    timeout: float | tuple[float, float] = DEFAULT_TIMEOUT,
+) -> dict[str, Any]:
+    """Call ``consensus-rankings`` with PPR scoring and return the parsed JSON.
+
+    Identical to :func:`fetch_consensus_adp` except ``scoring=PPR``. Uses
+    ``position=ALL``, ``type=ADP``, ``scoring=PPR``, ``experts=show``.
+
+    This response is pulled for one purpose only: to source ESPN's ADP
+    (``experts`` key ``79``), which FantasyPros exposes solely under PPR
+    scoring. It is enrichment for the primary Half-PPR player universe, not a
+    replacement for it.
+
+    Parameters
+    ----------
+    season:
+        NFL season year (path segment). Defaults to :data:`DEFAULT_SEASON`.
+    timeout:
+        ``requests`` timeout, in seconds. Either a single float or a
+        ``(connect, read)`` tuple. Defaults to :data:`DEFAULT_TIMEOUT`.
+
+    Returns
+    -------
+    dict
+        The parsed JSON response body exactly as returned by the API. No
+        transformation is applied, and in particular the nested per-player
+        ``experts`` values are left untouched.
+
+    Raises
+    ------
+    FantasyProsConfigError
+        If the API key environment variable is not set.
+    requests.HTTPError
+        If the API responds with a non-2xx status code.
+    requests.RequestException
+        For lower-level problems (connection errors, timeouts, etc.).
+
+    Notes
+    -----
+    * The PPR response carries a broader player universe (~700 players) than
+      the Half-PPR draft board (~340). The transformation layer LEFT JOINs
+      ESPN ADP onto the Half-PPR universe by ``player_id`` and must not adopt
+      this larger universe. RTSports / Sleeper values here are PPR and must
+      not be substituted for their Half-PPR values from
+      :func:`fetch_consensus_adp`.
+    * Like :func:`fetch_consensus_adp`, this performs a real, rate-limited API
+      call (~500/day premium limit). Call it once and cache via
+      :func:`save_raw_response` (pass
+      ``filename=CONSENSUS_ADP_PPR_RAW_FILENAME``), then develop against the
+      cache.
+    """
+
+    api_key = _get_api_key()
+
+    url = f"{BASE_URL}/nfl/{season}/consensus-rankings"
+    # The key travels only in this header dict; we never log `headers`.
+    headers = {"x-api-key": api_key}
+
+    response = requests.get(
+        url,
+        headers=headers,
+        params=_CONSENSUS_ADP_PPR_PARAMS,
+        timeout=timeout,
+    )
+
+    # Non-2xx -> raised HTTPError. Message carries the URL + status code but
+    # not the request headers, so the API key is not exposed.
     response.raise_for_status()
 
     return response.json()
