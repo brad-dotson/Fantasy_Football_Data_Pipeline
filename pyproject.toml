@@ -25,6 +25,7 @@ dependencies = [
     "python-dotenv",
     "pandas",       # transform layer
     "xlsxwriter",   # transform layer: Excel checkpoint export
+    "pyyaml",       # leagues layer: config/leagues.yml
 ]
 
 # src/ layout: tell setuptools to look for packages under src/ only.

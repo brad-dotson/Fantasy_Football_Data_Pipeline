@@ -1,0 +1,90 @@
+# League configuration for the league-specific draft sheets.
+#
+# Add a league by appending an entry under `leagues:` -- no code changes needed.
+# Each configured league becomes one worksheet in the generated draft workbook,
+# in the order listed here (the `data_dictionary` sheet always comes last).
+#
+# Required fields per league:
+#   league_name     display name; also the Excel sheet name (Excel truncates to
+#                   31 chars and forbids  []  :  *  ?  /  \  which are stripped)
+#   num_teams       number of teams / draft slots
+#   draft_position  YOUR snake-draft slot, an integer from 1..num_teams. Drives
+#                   which rows get highlighted (every pick where that slot is on
+#                   the clock, following the forward/reverse snake order).
+#   managers        ordered list of manager names = round-1 pick order. The list
+#                   length MUST equal num_teams. Names must not be blank.
+#
+# Placeholder names below are safe to hand-edit later. "You" marks the slot that
+# matches `draft_position` purely as a convenience; renaming it changes nothing.
+# Keeper logic is intentionally NOT modelled yet -- that is the next iteration.
+
+# EXAMPLE CONFIGURATION (commented out) -- copy/paste and edit to add your own leagues
+# leagues:
+#   - league_name: "EXAMPLE LEAGUE"
+#     num_teams: 12
+#     draft_position: 3
+#     managers:
+#       - "Manager 01"
+#       - "Manager 02"
+#       - "Manager 03"
+#       - "Manager 04"
+#       - "Manager 05"
+#       - "Manager 06"
+#       - "Manager 07"
+#       - "Manager 08"
+#       - "Manager 09"
+#       - "Manager 10"
+#       - "Manager 11"
+#       - "Manager 12"
+
+
+leagues:
+  - league_name: "The Boys"
+    num_teams: 12
+    draft_position: 3
+    managers:
+      - "Kweez"
+      - "Mun"
+      - "Brad"
+      - "Novacki"
+      - "Mac"
+      - "John"
+      - "Alton"
+      - "Shy"
+      - "Regg"
+      - "Joe"
+      - "Brian"
+      - "McGarry"
+
+  - league_name: "Cherri"
+    num_teams: 10
+    draft_position: 6
+    managers:
+      - "Bill Pax"
+      - "Will Byrne"
+      - "Regg"
+      - "Greico"
+      - "Lopez"
+      - "Brad"
+      - "Ric"
+      - "Derrick"
+      - "Scott/Jeb"
+      - "Pete/Novacki"
+
+  - league_name: "Draft Queens"
+    num_teams: 12
+    draft_position: 2
+    managers:
+      - "Marissa"
+      - "Lisa"
+      - "Caroline"
+      - "Mandy"
+      - "Maggie"
+      - "Jane"
+      - "Augie"
+      - "Hayley"
+      - "Danielle"
+      - "Kim"
+      - "Sami"
+      - "Whitney"
+

@@ -5,18 +5,46 @@ architecture and API details see `README.md` and `docs/`.
 
 ## What it produces
 
-One consolidated **half-PPR draft board** as an Excel workbook with two sheets:
+One Excel workbook: **one sheet per configured league**, then a
+`data_dictionary` sheet.
 
-- `checkpoint` (primary) — ~365 players (the FantasyPros consensus universe)
-  with consensus ranking / ADP, per-platform ADP (Yahoo, RTSports, Sleeper,
-  ESPN), 2026 projected points, 2025 actual points, and a few derived draft
-  columns.
-- `data_dictionary` — one row per `checkpoint` column: definition, source, and
-  notes (missing-value meaning, scoring format, known caveats). Generated from
-  maintained metadata in the code, so it always matches the columns actually
-  exported.
+- **League sheets** (one per entry in `config/leagues.yml`, in file order) —
+  the shared ~365-player half-PPR board (FantasyPros consensus universe:
+  consensus ranking / ADP, per-platform ADP for Yahoo, RTSports, Sleeper, ESPN,
+  2026 projected points, 2025 actual points, a few derived columns) with four
+  **snake-draft context columns prepended**, shown left-to-right as
+  `manager | pick | rnd | rnd_pick` then `player_name | team | position` (those
+  three headers are display labels for the internal `overall_pick`, `round`,
+  `pick_in_round`). Columns A:G and the header row are frozen. Rows where *your*
+  configured `draft_position` slot is on the clock are highlighted (pale amber),
+  following the forward/reverse snake order; `position` cells are pastel-shaded
+  by slot (RB/WR/QB/TE/DST/K). The player board itself is identical across
+  league sheets — only the prefix, freeze, and highlight differ.
+- **`data_dictionary`** — one row per output column (shared columns + the four
+  league columns): definition, source, notes (missing-value meaning, scoring
+  format, known caveats). Generated from maintained metadata in code, so it
+  always matches the columns actually exported.
 
-It's a review checkpoint, not a polished draft-day workbook yet.
+It's a review checkpoint, not a polished draft-day workbook yet. Keeper picks
+are **not** modelled yet — that's the next iteration.
+
+## League configuration
+
+`config/leagues.yml` defines the leagues. Add or remove leagues by editing that
+file only — no code changes. Each entry needs:
+
+| Field | Meaning |
+| --- | --- |
+| `league_name` | Display name; also the worksheet name. |
+| `num_teams` | Number of draft slots. |
+| `draft_position` | **Your** snake slot, `1..num_teams`; drives row highlighting. |
+| `managers` | Ordered list = round-1 pick order. Length **must** equal `num_teams`; no blank names. |
+
+The checked-in file has three leagues — **The Boys**, **Cherri**, and a
+**Placeholder League** — with placeholder manager names (`Manager 01…`, and
+`You` marking your slot). Edit them by hand with the real names/slots. The
+pipeline validates the config on every run and fails with a clear,
+league-named message if a rule is broken.
 
 ## Setup / prerequisites
 
@@ -90,12 +118,14 @@ numbers.
 - `--output PATH` — write the workbook to exactly this path (used verbatim, no
   date stamping).
 - `--raw-dir DIR` — read/write raw caches somewhere other than `data/raw/`.
+- `--league-config PATH` — use a league YAML other than `config/leagues.yml`.
 
 ## Where things live
 
 | What | Location |
 | --- | --- |
 | Raw API caches (JSON) | `data/raw/` |
+| League config (YAML) | `config/leagues.yml` |
 | Generated Excel outputs | `outputs/` |
 
 Both directories are git-ignored.

@@ -81,13 +81,18 @@ Current FantasyPros ingestion status:
 
 Transformation status:
 - First reusable transformation layer exists at
-  `src/fantasy_football/transform/`. It merges the cached raw payloads into a
-  consolidated player-level board and exports a date-stamped Excel review
-  checkpoint (`outputs/fantasy_draft_checkpoint_YYYY_MM_DD.xlsx`). The workbook
-  has two sheets: `checkpoint` (the player board) and `data_dictionary` (one
-  row per output column: definition, source, notes), generated from the
-  maintained column schema in `transform/draft_checkpoint.py`. This is a
-  review checkpoint, not the final draft-day workbook.
+  `src/fantasy_football/transform/`. It merges the cached raw payloads into one
+  shared consolidated player-level board (`data_dictionary` metadata generated
+  from the maintained column schema in `transform/draft_checkpoint.py`).
+- League-specific draft sheets (MVP) live in `src/fantasy_football/leagues.py`,
+  driven by `config/leagues.yml` (any number of leagues, no code changes). Each
+  league sheet is the shared board with four snake-draft columns prepended
+  (`overall_pick`, `round`, `pick_in_round`, `manager`) and the user's
+  `draft_position` picks highlighted. Keeper logic is not modelled yet.
+- The pipeline exports a date-stamped workbook
+  (`outputs/fantasy_draft_checkpoint_YYYY_MM_DD.xlsx`): one worksheet per
+  league, then `data_dictionary`. This is a review checkpoint, not the final
+  draft-day workbook.
 
 ## Architecture
 
@@ -101,6 +106,7 @@ APIs → raw storage / AWS → transformation layer → Databricks → analytics
 
 ## Project Structure
 
+- `config/` - user-editable configuration (`leagues.yml`)
 - `docs/` - project and API documentation
 - `notebooks/` - exploratory analysis and API experimentation
 - `reference/` - historical/reference artifacts from prior implementations

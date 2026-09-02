@@ -13,8 +13,9 @@ order and holds no business logic of its own:
 Each layer's real logic stays in its own module:
 
 * ``fantasy_football.extract.fantasypros``            -- API fetch + raw-cache writes
-* ``fantasy_football.transform.draft_checkpoint``     -- dataframe business logic
-* ``...draft_checkpoint.write_checkpoint_excel``      -- Excel-specific output
+* ``fantasy_football.transform.draft_checkpoint``     -- shared dataframe business logic
+* ``fantasy_football.leagues``                        -- league config + snake draft
+  ordering + the per-league Excel workbook (one sheet per league + data_dictionary)
 
 Nothing here imports Jupyter, and :func:`run_pipeline` makes no CLI or
 filesystem assumptions beyond a raw-cache directory and an output path (both
@@ -43,7 +44,12 @@ from fantasy_football.transform.draft_checkpoint import (
     build_draft_checkpoint,
     checkpoint_coverage_report,
     validate_checkpoint_schema,
-    write_checkpoint_excel,
+)
+from fantasy_football.leagues import (
+    DEFAULT_LEAGUE_CONFIG,
+    LeagueConfigError,
+    load_league_configs,
+    write_league_workbook,
 )
 
 #: Directory for generated Excel artifacts (``<repo>/outputs``). Derived from
@@ -87,9 +93,10 @@ class PipelineResult:
 
     output_path: Path
     row_count: int
-    column_count: int
+    column_count: int             # shared checkpoint column count (pre league prefix)
     refreshed: list[str]          # labels of caches refreshed this run ([] if none)
     coverage: dict[str, dict]     # enrichment coverage from checkpoint_coverage_report
+    leagues: list[str]            # league sheet names written, in workbook order
 
 
 def run_validation(players_df) -> dict:
@@ -148,6 +155,7 @@ def run_pipeline(
     refresh: bool = False,
     raw_dir: str | Path | None = None,
     output_path: str | Path | None = None,
+    league_config: str | Path | None = None,
 ) -> PipelineResult:
     """Run extract (optional) -> transform -> validate -> Excel, in that order.
 
@@ -163,6 +171,10 @@ def run_pipeline(
     output_path:
         Excel output path. Defaults to :func:`default_output_path` (a
         date-stamped file in ``<repo>/outputs``).
+    league_config:
+        YAML league config. Defaults to
+        :data:`fantasy_football.leagues.DEFAULT_LEAGUE_CONFIG`
+        (``config/leagues.yml``).
 
     Returns
     -------
@@ -180,15 +192,21 @@ def run_pipeline(
     else:
         _require_caches(raw_dir)
 
-    # The transformation layer owns all dataframe business logic.
+    # League config is loaded + validated up front so a bad YAML fails before
+    # any (potentially slow) transform work. The snake logic lives in
+    # ``fantasy_football.leagues``, not here.
+    leagues = load_league_configs(league_config)
+
+    # The transformation layer owns all shared dataframe business logic; it is
+    # built ONCE and reused for every league sheet.
     players_df = build_draft_checkpoint(raw_dir=raw_dir)
 
     # Validation / QA (reuses the transform layer's coverage report).
     report = run_validation(players_df)
 
-    # Output: Excel-specific behaviour lives in the transform package but
-    # outside the dataframe-building function.
-    written_path = write_checkpoint_excel(players_df, output_path)
+    # Output: one worksheet per league (shared board + a 4-column snake prefix)
+    # followed by the data_dictionary sheet.
+    written_path = write_league_workbook(players_df, leagues, output_path)
 
     return PipelineResult(
         output_path=written_path,
@@ -196,6 +214,7 @@ def run_pipeline(
         column_count=int(players_df.shape[1]),
         refreshed=refreshed,
         coverage=report["coverage"],
+        leagues=[c.league_name for c in leagues],
     )
 
 
@@ -210,7 +229,8 @@ def _print_summary(result: PipelineResult) -> None:
     else:
         print("  raw data: existing local cache")
     print(f"  players (rows): {result.row_count}")
-    print(f"  columns:        {result.column_count}")
+    print(f"  shared columns: {result.column_count} (+4 league columns per sheet)")
+    print(f"  league sheets:  {', '.join(result.leagues)}")
     print("  enrichment coverage:")
     for col, cov in result.coverage.items():
         print(f"    {col:<24} {cov['non_null']:>4} / {result.row_count}  ({cov['pct']}%)")
@@ -253,6 +273,13 @@ def main(argv: list[str] | None = None) -> int:
             f"{DEFAULT_OUTPUT_DIR}/{DEFAULT_OUTPUT_BASENAME}_<YYYY_MM_DD>.xlsx)"
         ),
     )
+    parser.add_argument(
+        "--league-config",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=f"YAML league config (default: {DEFAULT_LEAGUE_CONFIG})",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -260,10 +287,14 @@ def main(argv: list[str] | None = None) -> int:
             refresh=args.refresh,
             raw_dir=args.raw_dir,
             output_path=args.output,
+            league_config=args.league_config,
         )
     except FantasyProsConfigError as exc:
         # e.g. missing API key on --refresh
         print(f"pipeline: error: {exc}", file=sys.stderr)
+        return 2
+    except LeagueConfigError as exc:
+        print(f"pipeline: error: league config: {exc}", file=sys.stderr)
         return 2
     except requests.RequestException as exc:
         print(
