@@ -28,3 +28,4 @@ This project serves two purposes:
 - Move stable/reusable logic into `src/` as the project matures.
 - Read `docs/fantasypros_api_notes.md` before changing FantasyPros ingestion logic.
 - Treat the consensus rankings dataset as the primary player universe; enrich it with other FantasyPros datasets using left joins unless there is a strong reason to do otherwise.
+- `HOW_TO_USE.md` is a living, user-facing operational guide for the project owner. Keep it current whenever a change affects how the project is run or used (commands, flags, environment setup, data/output locations).

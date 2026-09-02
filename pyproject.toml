@@ -23,6 +23,8 @@ requires-python = ">=3.11"
 dependencies = [
     "requests",
     "python-dotenv",
+    "pandas",       # transform layer
+    "xlsxwriter",   # transform layer: Excel checkpoint export
 ]
 
 # src/ layout: tell setuptools to look for packages under src/ only.

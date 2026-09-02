@@ -43,6 +43,30 @@ Relevant player fields observed:
 - `pos_rank`
 - `tier`
 
+#### `rank_ecr` vs. consensus ADP semantics (important)
+
+This pull uses `type=ADP`. In that mode FantasyPros reuses the `rank_ecr`
+field name to hold the consensus **ADP ordinal** (a dense 1..N rank of players
+by average draft slot); it is **not** a separate, non-ADP expert consensus
+ranking. The only other consensus number in the same payload is `rank_ave`
+(mean draft slot across the ADP sources), which `rank_min` / `rank_max` /
+`rank_std` describe the spread of.
+
+So a single `type=ADP` response does **not** contain two independent concepts
+("expert ranking" vs. "market ADP"). The transformation layer maps `rank_ave`
+to `consensus_adp_half` and passes `rank_ecr` through as the ADP ordinal, so
+its `adp_vs_ecr` metric is currently a small residual, not a true
+ADP-vs-ECR gap. A genuine ECR comparison would need a separate `type=ECR`
+(or `/rankings`) pull, which is not yet cached.
+
+#### `experts=show` drops the per-player `tier` field
+
+When `experts=show` is supplied (the production pull, needed for
+platform-specific ADP), the response adds the nested `experts` dict and
+`rank_points` but **omits** the per-player `tier` field that the
+`experts`-less pull returns. The consolidated checkpoint therefore keeps a
+`tier` column but leaves it null for now.
+
 ## Platform-specific ADP
 
 FantasyPros support confirmed that individual platform ADP values are included
@@ -337,6 +361,36 @@ Decision:
 - Do not add injury fields to the primary draft board from this source
 - Current injury / suspension context can be handled through manual research
   closer to draft time unless a better structured source is identified later
+
+## Transformation layer
+
+`src/fantasy_football/transform/draft_checkpoint.py` is the first reusable
+transformation module. It consumes the four cached payloads below (no API
+calls), treats the Half-PPR consensus response as the primary player universe,
+LEFT JOINs the others on `player_id` (consensus `player_id` == projections
+`fpid`), derives `rank_range` and `adp_vs_ecr`, and returns one consolidated
+player-level dataframe. `write_checkpoint_excel(df, path)` writes it to the
+given path (single sheet, frozen header, autofilter) as a review checkpoint.
+The pipeline runner's default path is date-stamped
+(`outputs/fantasy_draft_checkpoint_YYYY_MM_DD.xlsx`). Demonstrated in
+`notebooks/02_transform_consensus_adp.ipynb`.
+
+## Pipeline runner
+
+`python -m fantasy_football.pipeline` (`src/fantasy_football/pipeline.py`)
+orchestrates extraction -> transformation -> validation -> Excel in one
+command. By default it runs entirely off the cached raw JSON.
+
+`--refresh` calls `refresh_raw_caches()` in `extract/fantasypros.py`, which
+rebuilds the current-season caches listed in `REFRESHABLE_SOURCES`:
+
+- `fantasypros_consensus_adp_2026_half.json` (`fetch_consensus_adp`)
+- `fantasypros_consensus_adp_2026_ppr.json` (`fetch_consensus_adp_ppr`)
+- `fantasypros_projections_2026.json` (`fetch_projections`)
+
+`fantasypros_player_points_2025_half.json` is intentionally excluded (2025 is
+complete). Add a source later by appending a `RefreshableSource` to that
+tuple. A failed refresh propagates; the runner never falls back to stale cache.
 
 ## Caching strategy
 - Save successful API responses under `data/raw/`.

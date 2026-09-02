@@ -48,9 +48,10 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import requests
 
@@ -60,6 +61,7 @@ __all__ = [
     "DEFAULT_SEASON",
     "DEFAULT_TIMEOUT",
     "DEFAULT_RAW_DIR",
+    "CONSENSUS_ADP_HALF_RAW_FILENAME",
     "CONSENSUS_ADP_PPR_RAW_FILENAME",
     "PROJECTIONS_RAW_FILENAME",
     "PLAYER_POINTS_SEASON",
@@ -69,6 +71,9 @@ __all__ = [
     "fetch_projections",
     "fetch_player_points",
     "save_raw_response",
+    "RefreshableSource",
+    "REFRESHABLE_SOURCES",
+    "refresh_raw_caches",
 ]
 
 
@@ -137,10 +142,19 @@ _CONSENSUS_ADP_PPR_PARAMS = {
     "experts": "show",
 }
 
+#: Production raw-cache filename for the Half-PPR consensus ADP pull -- the
+#: primary player-universe cache. Previously this name was only an inline
+#: default inside :func:`save_raw_response`; hoisting it to a named constant
+#: lets the refresh orchestration (:func:`refresh_raw_caches`) and the
+#: transformation layer refer to exactly the same file.
+CONSENSUS_ADP_HALF_RAW_FILENAME = (
+    f"fantasypros_consensus_adp_{DEFAULT_SEASON}_half.json"
+)
+
 #: Production raw-cache filename for the PPR consensus ADP pull. Carries a
 #: ``_ppr`` suffix to sit alongside -- and never overwrite -- the Half-PPR
-#: cache (``fantasypros_consensus_adp_<season>_half.json``, still the inline
-#: default of :func:`save_raw_response`). Scoring is chosen at request time for
+#: cache (:data:`CONSENSUS_ADP_HALF_RAW_FILENAME`, still the default of
+#: :func:`save_raw_response`). Scoring is chosen at request time for
 #: this endpoint, so the suffix mirrors the ``_half`` one on
 #: :data:`PLAYER_POINTS_RAW_FILENAME` rather than the suffix-less
 #: :data:`PROJECTIONS_RAW_FILENAME`.
@@ -546,7 +560,7 @@ def save_raw_response(
     """
 
     if filename is None:
-        filename = f"fantasypros_consensus_adp_{DEFAULT_SEASON}_half.json"
+        filename = CONSENSUS_ADP_HALF_RAW_FILENAME
 
     if add_timestamp:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -561,3 +575,103 @@ def save_raw_response(
         json.dump(payload, f, indent=2, ensure_ascii=False)
 
     return out_path
+
+
+# --- Refresh orchestration -------------------------------------------------
+#
+# A tiny registry so a caller (e.g. ``fantasy_football.pipeline``) can rebuild
+# every current-season raw cache without knowing which fetch function pairs
+# with which filename. This is still "pull + cache, no transformation" -- it
+# just loops the existing ``fetch_*`` + :func:`save_raw_response` helpers.
+
+
+class RefreshableSource(NamedTuple):
+    """One raw cache that :func:`refresh_raw_caches` knows how to rebuild.
+
+    Attributes
+    ----------
+    label:
+        Human-readable name, used only for logging / summaries.
+    fetch:
+        Callable returning the parsed JSON payload. Must accept a ``timeout``
+        keyword (every ``fetch_*`` helper in this module does) and must not
+        require any other argument.
+    filename:
+        Target file in the raw-cache directory; overwritten in place.
+    """
+
+    label: str
+    fetch: Callable[..., dict[str, Any]]
+    filename: str
+
+
+#: Current-season sources refreshed by default. The 2025 player-points cache is
+#: intentionally excluded: that season is complete, so it will not change. To
+#: make it (or any future source) refreshable, append a ``RefreshableSource``,
+#: e.g. ``RefreshableSource("2025 player points", fetch_player_points,
+#: PLAYER_POINTS_RAW_FILENAME)``.
+REFRESHABLE_SOURCES: tuple[RefreshableSource, ...] = (
+    RefreshableSource(
+        "2026 Half-PPR consensus / platform ADP",
+        fetch_consensus_adp,
+        CONSENSUS_ADP_HALF_RAW_FILENAME,
+    ),
+    RefreshableSource(
+        "2026 PPR consensus (ESPN ADP source)",
+        fetch_consensus_adp_ppr,
+        CONSENSUS_ADP_PPR_RAW_FILENAME,
+    ),
+    RefreshableSource(
+        "2026 projections",
+        fetch_projections,
+        PROJECTIONS_RAW_FILENAME,
+    ),
+)
+
+
+def refresh_raw_caches(
+    sources: tuple[RefreshableSource, ...] = REFRESHABLE_SOURCES,
+    *,
+    dest_dir: str | Path = DEFAULT_RAW_DIR,
+    timeout: float | tuple[float, float] = DEFAULT_TIMEOUT,
+) -> list[tuple[str, Path]]:
+    """Fetch each source in ``sources`` and overwrite its raw cache file.
+
+    Thin orchestration only: no reshaping of any payload. The API key is
+    checked once up front so a misconfigured environment fails before any
+    network call is made.
+
+    Parameters
+    ----------
+    sources:
+        Which caches to rebuild. Defaults to :data:`REFRESHABLE_SOURCES`.
+    dest_dir:
+        Raw-cache directory. Must match what the transformation layer reads.
+    timeout:
+        ``requests`` timeout passed through to every fetch call.
+
+    Returns
+    -------
+    list of (label, pathlib.Path)
+        One entry per refreshed cache, in ``sources`` order.
+
+    Raises
+    ------
+    FantasyProsConfigError
+        If the API key environment variable is not set.
+    requests.RequestException
+        If any fetch call fails. Sources earlier in the list may already have
+        been written; nothing here falls back to stale data.
+    """
+
+    # Fail fast + clearly on a missing key, before doing any HTTP work.
+    _get_api_key()
+
+    written: list[tuple[str, Path]] = []
+    for source in sources:
+        payload = source.fetch(timeout=timeout)
+        path = save_raw_response(
+            payload, filename=source.filename, dest_dir=dest_dir
+        )
+        written.append((source.label, path))
+    return written
