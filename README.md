@@ -83,8 +83,11 @@ Transformation status:
 - First reusable transformation layer exists at
   `src/fantasy_football/transform/`. It merges the cached raw payloads into a
   consolidated player-level board and exports a date-stamped Excel review
-  checkpoint (`outputs/fantasy_draft_checkpoint_YYYY_MM_DD.xlsx`). This is
-  a review checkpoint, not the final draft-day workbook.
+  checkpoint (`outputs/fantasy_draft_checkpoint_YYYY_MM_DD.xlsx`). The workbook
+  has two sheets: `checkpoint` (the player board) and `data_dictionary` (one
+  row per output column: definition, source, notes), generated from the
+  maintained column schema in `transform/draft_checkpoint.py`. This is a
+  review checkpoint, not the final draft-day workbook.
 
 ## Architecture
 
@@ -141,9 +144,12 @@ python -m fantasy_football.pipeline --refresh
 `--refresh` fetches the 2026 Half-PPR consensus / platform ADP, the 2026 PPR
 consensus (ESPN ADP source), and 2026 projections from the FantasyPros API,
 overwrites those raw caches, then runs the **same** downstream
-transform → validate → Excel path. It needs `FANTASYPROS_API_KEY` set (see
-`.env`). The completed 2025 player-points cache is not refreshed. If a refresh
-fetch fails, the command fails — it does not fall back to stale cache.
+transform → validate → Excel path. It needs `FANTASYPROS_API_KEY` set in `.env`
+(a FantasyPros premium / Hall of Fame key — the free-tier sample responses lack
+the required fields; see `HOW_TO_USE.md`). The completed 2025 player-points
+cache is not refreshed. If a refresh fetch fails, the command fails — it does
+not fall back to stale cache. The default (no `--refresh`) run makes no API
+calls and needs no key.
 
 Optional flags: `--raw-dir DIR` and `--output PATH` override the defaults
 (an explicit `--output` path is used verbatim, without date stamping).

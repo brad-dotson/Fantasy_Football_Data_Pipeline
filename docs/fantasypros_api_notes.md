@@ -369,11 +369,26 @@ transformation module. It consumes the four cached payloads below (no API
 calls), treats the Half-PPR consensus response as the primary player universe,
 LEFT JOINs the others on `player_id` (consensus `player_id` == projections
 `fpid`), derives `rank_range` and `adp_vs_ecr`, and returns one consolidated
-player-level dataframe. `write_checkpoint_excel(df, path)` writes it to the
-given path (single sheet, frozen header, autofilter) as a review checkpoint.
-The pipeline runner's default path is date-stamped
+player-level dataframe.
+
+The output column set + order is defined once as `CHECKPOINT_SCHEMA` (a tuple
+of `ColumnSpec` records: name / group / definition / source / notes).
+`CHECKPOINT_COLUMNS` is derived from it, and `build_data_dictionary()` turns
+the same metadata into the `data_dictionary` table. `validate_checkpoint_schema()`
+(run inside the pipeline's validation step and again at Excel-write time) fails
+if an exported column has no `ColumnSpec` or a `ColumnSpec` is stale.
+
+The raw payload's `player_eligibility` (multi-position eligibility) was
+manually inspected and is **not** carried into the checkpoint schema; the raw
+field is left untouched in the cache.
+
+`write_checkpoint_excel(df, path)` writes a two-sheet review workbook to the
+given path: `checkpoint` (the player board — frozen header, autofilter) and
+`data_dictionary` (frozen header, autofilter, wrapped prose columns). The
+pipeline runner's default path is date-stamped
 (`outputs/fantasy_draft_checkpoint_YYYY_MM_DD.xlsx`). Demonstrated in
-`notebooks/02_transform_consensus_adp.ipynb`.
+`notebooks/02_transform_consensus_adp.ipynb` (predates the `data_dictionary`
+sheet and the `eligible_positions` removal).
 
 ## Pipeline runner
 

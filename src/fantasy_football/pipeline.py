@@ -39,8 +39,10 @@ from fantasy_football.extract.fantasypros import (
 )
 from fantasy_football.transform.draft_checkpoint import (
     REQUIRED_RAW_FILES,
+    CheckpointSchemaError,
     build_draft_checkpoint,
     checkpoint_coverage_report,
+    validate_checkpoint_schema,
     write_checkpoint_excel,
 )
 
@@ -100,8 +102,9 @@ def run_validation(players_df) -> dict:
     Raises
     ------
     PipelineValidationError
-        If the frame is empty, ``player_id`` is non-unique, or ``player_id``
-        contains nulls.
+        If the frame is empty, ``player_id`` is non-unique, ``player_id``
+        contains nulls, or the exported columns have drifted from the
+        maintained data-dictionary schema (:data:`CHECKPOINT_SCHEMA`).
     """
 
     report = checkpoint_coverage_report(players_df)
@@ -113,6 +116,13 @@ def run_validation(players_df) -> dict:
         problems.append("player_id is not unique (duplicate primary keys)")
     if report["player_id_nulls"]:
         problems.append(f"player_id has {report['player_id_nulls']} null value(s)")
+
+    # Every exported column must have exactly one data-dictionary entry, and no
+    # dictionary entry may be stale. Keeps the Excel data_dictionary tab honest.
+    try:
+        validate_checkpoint_schema(players_df.columns)
+    except CheckpointSchemaError as exc:
+        problems.append(str(exc))
 
     if problems:
         raise PipelineValidationError("; ".join(problems))

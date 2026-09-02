@@ -5,11 +5,38 @@ architecture and API details see `README.md` and `docs/`.
 
 ## What it produces
 
-One consolidated **half-PPR draft board** as a single-sheet Excel workbook:
-~365 players (the FantasyPros consensus universe) with consensus ranking /
-ADP, per-platform ADP (Yahoo, RTSports, Sleeper, ESPN), 2026 projected points,
-2025 actual points, and a few derived draft columns. It's a review checkpoint,
-not a polished draft-day workbook yet.
+One consolidated **half-PPR draft board** as an Excel workbook with two sheets:
+
+- `checkpoint` (primary) — ~365 players (the FantasyPros consensus universe)
+  with consensus ranking / ADP, per-platform ADP (Yahoo, RTSports, Sleeper,
+  ESPN), 2026 projected points, 2025 actual points, and a few derived draft
+  columns.
+- `data_dictionary` — one row per `checkpoint` column: definition, source, and
+  notes (missing-value meaning, scoring format, known caveats). Generated from
+  maintained metadata in the code, so it always matches the columns actually
+  exported.
+
+It's a review checkpoint, not a polished draft-day workbook yet.
+
+## Setup / prerequisites
+
+### Cached mode (default — no key, no network)
+
+`python -m fantasy_football.pipeline` runs entirely off the raw JSON already in
+`data/raw/`. It makes **no API calls** and needs **no API key**, as long as the
+required raw cache files are present (the command fails clearly naming any that
+are missing).
+
+### Fresh-data mode (`--refresh`)
+
+To pull fresh numbers you need a **FantasyPros Public API key**:
+
+- The project reads it from the environment variable **`FANTASYPROS_API_KEY`**.
+- Store it with the project's existing `.env` approach (a `FANTASYPROS_API_KEY=...`
+  line in `.env` at the repo root). Never commit the key or paste it into docs.
+- The key must have **FantasyPros premium / Hall of Fame API access**. This
+  workflow depends on the full premium responses; the restricted free-tier /
+  sample responses do not contain the fields the transform needs.
 
 ## Environment
 

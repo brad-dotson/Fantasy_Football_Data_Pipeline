@@ -51,17 +51,23 @@ pull that has not been cached yet. See ``RANK_ECR_VS_ADP_NOTE``.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import pandas as pd
 
 __all__ = [
+    "ColumnSpec",
+    "CHECKPOINT_SCHEMA",
     "CHECKPOINT_COLUMNS",
     "RANK_ECR_VS_ADP_NOTE",
     "DEFAULT_RAW_DIR",
     "REQUIRED_RAW_FILES",
+    "CheckpointSchemaError",
     "build_draft_checkpoint",
+    "build_data_dictionary",
+    "validate_checkpoint_schema",
     "checkpoint_coverage_report",
     "write_checkpoint_excel",
 ]
@@ -113,46 +119,237 @@ RANK_ECR_VS_ADP_NOTE = (
 )
 
 
-#: Final column order for the checkpoint dataframe / Excel sheet. ``tier`` is
-#: intentionally kept even though the current half-PPR cache does not carry it
-#: (see :func:`_load_half_consensus`).
-CHECKPOINT_COLUMNS = [
-    # identity / context
-    "player_name",
-    "team",
-    "position",
-    "pos_rank",
-    "bye_wk",
-    # fantasypros ranking / consensus
-    "rank_ecr",
-    "consensus_adp_half",
-    "tier",
-    "rank_min",
-    "rank_max",
-    "rank_avg",
-    "rank_std",
-    "rank_range",
-    # platform-specific adp
-    "yahoo_adp_half",
-    "rtsports_adp_half",
-    "sleeper_adp_half",
-    "espn_adp_ppr",
-    # prior-season performance (2025 half-PPR)
-    "2025_games_played",
-    "2025_points_half",
-    "2025_ppg_half",
-    # 2026 projections
-    "projected_points_half",
-    # derived draft metrics
-    "adp_vs_ecr",
-    # optional / review before final dataset
-    "eligible_positions",
-    # merge / reference keys
-    "player_id",
-    "sportsdata_id",
-    "player_yahoo_id",
-    "cbs_player_id",
-]
+@dataclass(frozen=True)
+class ColumnSpec:
+    """Metadata for one output column of the draft checkpoint.
+
+    This is the *single source of truth* for both (a) the checkpoint column
+    order and (b) the ``data_dictionary`` worksheet. Adding / changing an output
+    column means editing exactly one entry in :data:`CHECKPOINT_SCHEMA` -- the
+    dataframe order and the Excel dictionary tab are derived from it, so the two
+    cannot silently drift apart. :func:`validate_checkpoint_schema` enforces the
+    round-trip (every exported column has an entry; no entry is stale).
+    """
+
+    name: str          #: internal storage column name (unchanged by this layer)
+    group: str          #: section heading, used to organise the data dictionary
+    definition: str     #: concise but specific description of the field
+    source: str         #: where the value comes from (raw payload / derived)
+    notes: str = ""     #: caveats: missing-value meaning, scoring format, known issues
+
+
+#: Ordered schema for the checkpoint dataframe / Excel sheet.
+#:
+#: ``tier`` is intentionally kept even though the current ``experts=show``
+#: half-PPR cache does not carry it (see :func:`_load_half_consensus` and the
+#: note in each spec). Column order below *is* the output column order.
+CHECKPOINT_SCHEMA: tuple[ColumnSpec, ...] = (
+    # --- identity / context ------------------------------------------------
+    ColumnSpec(
+        "player_name",
+        "Identity / context",
+        "Player full name.",
+        "FantasyPros 2026 Half-PPR consensus ADP response (`player_name`).",
+        "Spine dataset: this response defines the player universe.",
+    ),
+    ColumnSpec(
+        "team",
+        "Identity / context",
+        "Current NFL team abbreviation.",
+        "FantasyPros 2026 Half-PPR consensus ADP response (`player_team_id`).",
+    ),
+    ColumnSpec(
+        "position",
+        "Identity / context",
+        "Primary fantasy position (QB / RB / WR / TE / K / DST).",
+        "FantasyPros 2026 Half-PPR consensus ADP response (`player_position_id`).",
+    ),
+    ColumnSpec(
+        "pos_rank",
+        "Identity / context",
+        "FantasyPros positional rank label (e.g. `RB5`).",
+        "FantasyPros 2026 Half-PPR consensus ADP response (`pos_rank`).",
+    ),
+    ColumnSpec(
+        "bye_wk",
+        "Identity / context",
+        "2026 bye week number.",
+        "FantasyPros 2026 Half-PPR consensus ADP response (`player_bye_week`).",
+        "Nullable integer; `<NA>` if the source omitted it.",
+    ),
+    # --- primary draft decision fields -----------------------------------
+    ColumnSpec(
+        "rank_ecr",
+        "Primary draft decision fields",
+        "Ordinal consensus ADP rank (dense 1..N by average draft slot) from the "
+        "`type=ADP` consensus response.",
+        "FantasyPros 2026 Half-PPR consensus ADP response, `type=ADP` (`rank_ecr`).",
+        "Despite the API field name, this is NOT an independently sourced Expert "
+        "Consensus Ranking in the current pipeline -- it is the ADP ordinal. To be "
+        "replaced once a true `type=ECR` / `/rankings` pull is added. See "
+        "`RANK_ECR_VS_ADP_NOTE`.",
+    ),
+    ColumnSpec(
+        "consensus_adp_half",
+        "Primary draft decision fields",
+        "Consensus Half-PPR average draft position: mean draft slot across the "
+        "Half-PPR ADP sources in the consensus response.",
+        "FantasyPros 2026 Half-PPR consensus ADP response (`rank_ave`).",
+        "Same underlying source field as `rank_avg`.",
+    ),
+    ColumnSpec(
+        "adp_vs_ecr",
+        "Primary draft decision fields",
+        "Derived: `consensus_adp_half - rank_ecr`.",
+        "Derived in the transformation layer.",
+        "Because `rank_ecr` is currently the ADP ordinal (not a true ECR), this is "
+        "mean ADP slot minus ADP ordinal -- a small residual. Do NOT interpret as "
+        "true market-vs-expert value yet; expected to become meaningful when a real "
+        "ECR source is added.",
+    ),
+    ColumnSpec(
+        "projected_points_half",
+        "Primary draft decision fields",
+        "2026 preseason projected fantasy points, Half-PPR scoring.",
+        "FantasyPros 2026 projections response, `stats.points_half` "
+        "(LEFT JOIN on `player_id` == projections `fpid`).",
+        "Missing means no projection was published for that player -- not zero.",
+    ),
+    ColumnSpec(
+        "tier",
+        "Primary draft decision fields",
+        "FantasyPros draft tier grouping.",
+        "FantasyPros 2026 Half-PPR consensus ADP response (`tier`).",
+        "Currently always empty: the production `experts=show` consensus response "
+        "omits the per-player `tier` field. Column retained for schema stability; "
+        "values are not fabricated.",
+    ),
+    # --- ranking distribution -------------------------------------------
+    ColumnSpec(
+        "rank_avg",
+        "Ranking distribution",
+        "Average consensus draft slot across the Half-PPR ADP sources.",
+        "FantasyPros 2026 Half-PPR consensus ADP response (`rank_ave`).",
+        "Same source field as `consensus_adp_half`.",
+    ),
+    ColumnSpec(
+        "rank_std",
+        "Ranking distribution",
+        "Standard deviation of the player's draft slot across the ADP sources.",
+        "FantasyPros 2026 Half-PPR consensus ADP response (`rank_std`).",
+        "Higher = more disagreement between sources.",
+    ),
+    ColumnSpec(
+        "rank_min",
+        "Ranking distribution",
+        "Earliest (lowest-numbered) draft slot for the player across the ADP sources.",
+        "FantasyPros 2026 Half-PPR consensus ADP response (`rank_min`).",
+    ),
+    ColumnSpec(
+        "rank_max",
+        "Ranking distribution",
+        "Latest (highest-numbered) draft slot for the player across the ADP sources.",
+        "FantasyPros 2026 Half-PPR consensus ADP response (`rank_max`).",
+    ),
+    ColumnSpec(
+        "rank_range",
+        "Ranking distribution",
+        "Derived: `rank_max - rank_min` -- width of the observed draft-slot range.",
+        "Derived in the transformation layer.",
+    ),
+    # --- platform ADP --------------------------------------------------
+    ColumnSpec(
+        "yahoo_adp_half",
+        "Platform ADP",
+        "Yahoo average draft position, Half-PPR scoring.",
+        "FantasyPros 2026 Half-PPR consensus ADP response, `experts` dict key `236`.",
+        "Missing means Yahoo did not rank the player -- not zero.",
+    ),
+    ColumnSpec(
+        "rtsports_adp_half",
+        "Platform ADP",
+        "RTSports average draft position, Half-PPR scoring.",
+        "FantasyPros 2026 Half-PPR consensus ADP response, `experts` dict key `439`.",
+        "Missing means the source was unavailable for that player -- not zero.",
+    ),
+    ColumnSpec(
+        "sleeper_adp_half",
+        "Platform ADP",
+        "Sleeper average draft position, Half-PPR scoring.",
+        "FantasyPros 2026 Half-PPR consensus ADP response, `experts` dict key `4350`.",
+        "Missing means the source was unavailable for that player -- not zero.",
+    ),
+    ColumnSpec(
+        "espn_adp_ppr",
+        "Platform ADP",
+        "ESPN average draft position, PPR scoring.",
+        "FantasyPros 2026 PPR consensus ADP response, `experts` dict key `79` "
+        "(LEFT JOIN on `player_id`).",
+        "PPR, NOT Half-PPR: ESPN ADP is only published under PPR scoring, unlike the "
+        "Yahoo / RTSports / Sleeper fields which are Half-PPR. Missing means the "
+        "source was unavailable for that player -- not zero.",
+    ),
+    # --- prior-season performance ------------------------------------
+    ColumnSpec(
+        "2025_games_played",
+        "Prior-season performance",
+        "Games played in the 2025 NFL season.",
+        "FantasyPros 2025 player-points response (`games`), LEFT JOIN on `player_id`.",
+        "Missing means no 2025 player-points record (e.g. 2026 rookie) -- not zero.",
+    ),
+    ColumnSpec(
+        "2025_points_half",
+        "Prior-season performance",
+        "Total 2025 fantasy points, Half-PPR scoring.",
+        "FantasyPros 2025 player-points response, `scoring=HALF` (`points`).",
+        "Missing means no applicable 2025 record -- not zero.",
+    ),
+    ColumnSpec(
+        "2025_ppg_half",
+        "Prior-season performance",
+        "2025 fantasy points per game, Half-PPR scoring.",
+        "FantasyPros 2025 player-points response, `scoring=HALF` (`average`).",
+        "Missing means no applicable 2025 record -- not zero.",
+    ),
+    # --- merge / reference keys -----------------------------------
+    ColumnSpec(
+        "player_id",
+        "Merge / reference keys",
+        "FantasyPros player ID -- primary join key across all FantasyPros datasets "
+        "(equals `fpid` in the projections payload).",
+        "FantasyPros 2026 Half-PPR consensus ADP response (`player_id`).",
+        "Unique, non-null: the spine primary key.",
+    ),
+    ColumnSpec(
+        "sportsdata_id",
+        "Merge / reference keys",
+        "SportsData.io player ID.",
+        "FantasyPros 2026 Half-PPR consensus ADP response (`sportsdata_id`).",
+        "Reference key for future SportsData.io joins; not consumed by this pipeline yet.",
+    ),
+    ColumnSpec(
+        "player_yahoo_id",
+        "Merge / reference keys",
+        "Yahoo player ID.",
+        "FantasyPros 2026 Half-PPR consensus ADP response (`player_yahoo_id`).",
+        "Reference key for future Yahoo joins; not consumed by this pipeline yet.",
+    ),
+    ColumnSpec(
+        "cbs_player_id",
+        "Merge / reference keys",
+        "CBS player ID.",
+        "FantasyPros 2026 Half-PPR consensus ADP response (`cbs_player_id`).",
+        "Reference key for future CBS joins; not consumed by this pipeline yet.",
+    ),
+)
+
+#: Final column order for the checkpoint dataframe / Excel sheet, derived from
+#: :data:`CHECKPOINT_SCHEMA` so order and dictionary metadata stay in lockstep.
+CHECKPOINT_COLUMNS = [spec.name for spec in CHECKPOINT_SCHEMA]
+
+
+class CheckpointSchemaError(RuntimeError):
+    """The exported columns and :data:`CHECKPOINT_SCHEMA` have drifted apart."""
 
 
 # --- Small helpers -------------------------------------------------------------
@@ -237,8 +434,9 @@ def _load_half_consensus(raw_dir: Path) -> pd.DataFrame:
     for src_key, col in _HALF_ADP_SOURCES.items():
         df[col] = _num(raw["experts"].apply(lambda e, k=src_key: _experts_value(e, k)))
 
-    # optional / review
-    df["eligible_positions"] = raw["player_eligibility"]  # player_eligibility -> eligible_positions
+    # NOTE: the raw payload also carries `player_eligibility` (multi-position
+    # eligibility). It was manually inspected and dropped from the checkpoint
+    # schema as not useful for this workflow; the raw field is untouched.
 
     # merge / reference keys (kept as-is; these are string IDs)
     df["sportsdata_id"] = raw["sportsdata_id"]
@@ -384,19 +582,95 @@ def checkpoint_coverage_report(df: pd.DataFrame) -> dict[str, Any]:
     }
 
 
-def write_checkpoint_excel(df: pd.DataFrame, out_path: str | Path) -> Path:
-    """Write ``df`` to a single-sheet Excel review workbook.
+def validate_checkpoint_schema(columns: Iterable[str]) -> None:
+    """Check the exported columns and :data:`CHECKPOINT_SCHEMA` still agree.
 
-    Minimal formatting only: frozen header row, autofilter, and sane column
-    widths. No colors / conditional formatting / charts -- this is a review
-    checkpoint, not the final draft-day workbook. Internal column names are
-    kept as-is (not relabeled for presentation).
+    Guards against the two ways the schema metadata and the real output can
+    drift apart:
+
+    * an exported column with **no** :class:`ColumnSpec` entry (its meaning
+      would be undocumented in the ``data_dictionary`` tab), and
+    * a stale :class:`ColumnSpec` entry for a column that is no longer exported.
+
+    Raises
+    ------
+    CheckpointSchemaError
+        If either mismatch is found.
+    """
+
+    exported = list(columns)
+    schema_names = [spec.name for spec in CHECKPOINT_SCHEMA]
+
+    undocumented = [c for c in exported if c not in schema_names]
+    stale = [c for c in schema_names if c not in exported]
+
+    problems: list[str] = []
+    if undocumented:
+        problems.append(
+            f"exported column(s) with no data-dictionary entry: {undocumented}"
+        )
+    if stale:
+        problems.append(
+            f"data-dictionary entr(y/ies) for column(s) that are no longer exported: {stale}"
+        )
+    if problems:
+        raise CheckpointSchemaError("; ".join(problems))
+
+
+def build_data_dictionary(columns: Iterable[str] | None = None) -> pd.DataFrame:
+    """Build the ``data_dictionary`` table from :data:`CHECKPOINT_SCHEMA`.
+
+    One row per output column: ``column_name``, ``group``, ``definition``,
+    ``source``, ``notes`` -- in checkpoint column order.
+
+    Parameters
+    ----------
+    columns:
+        If given, :func:`validate_checkpoint_schema` is run against it first so
+        a drifted schema fails loudly instead of silently emitting a mismatched
+        dictionary.
+    """
+
+    if columns is not None:
+        validate_checkpoint_schema(columns)
+
+    return pd.DataFrame(
+        [
+            {
+                "column_name": spec.name,
+                "group": spec.group,
+                "definition": spec.definition,
+                "source": spec.source,
+                "notes": spec.notes,
+            }
+            for spec in CHECKPOINT_SCHEMA
+        ]
+    )
+
+
+def write_checkpoint_excel(df: pd.DataFrame, out_path: str | Path) -> Path:
+    """Write ``df`` to an Excel review workbook with a data dictionary tab.
+
+    Two sheets:
+
+    * ``checkpoint`` -- the player board (primary sheet, unchanged layout).
+    * ``data_dictionary`` -- one row per output column, generated from
+      :data:`CHECKPOINT_SCHEMA` (see :func:`build_data_dictionary`).
+
+    Minimal formatting only: frozen header rows, autofilter, sane column widths,
+    and text wrap on the dictionary's prose columns. No colors / conditional
+    formatting / charts -- this is a review checkpoint, not the final draft-day
+    workbook. Internal column names are kept as-is (not relabeled).
     """
 
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Fails loudly if the schema metadata and the real columns have drifted.
+    data_dictionary = build_data_dictionary(df.columns)
+
     with pd.ExcelWriter(out_path, engine="xlsxwriter") as writer:
+        # --- primary sheet: the player board -----------------------------
         sheet = "checkpoint"
         df.to_excel(writer, sheet_name=sheet, index=False)
         worksheet = writer.sheets[sheet]
@@ -413,5 +687,29 @@ def write_checkpoint_excel(df: pd.DataFrame, out_path: str | Path) -> Path:
                 [len(str(col))] + [len(str(v)) for v in sample[col].tolist() if v is not None]
             )
             worksheet.set_column(i, i, max(10, min(longest + 2, 40)))
+
+        # --- second sheet: data dictionary -----------------------------
+        dd_sheet = "data_dictionary"
+        data_dictionary.to_excel(writer, sheet_name=dd_sheet, index=False)
+        dd_ws = writer.sheets[dd_sheet]
+
+        dd_rows, dd_cols = data_dictionary.shape
+        dd_ws.freeze_panes(1, 0)
+        dd_ws.autofilter(0, 0, dd_rows, dd_cols - 1)
+
+        # Wrap the long prose columns; keep the short ones plain.
+        wrap = writer.book.add_format({"text_wrap": True, "valign": "top"})
+        dd_widths = {
+            "column_name": 24,
+            "group": 26,
+            "definition": 70,
+            "source": 52,
+            "notes": 60,
+        }
+        wrapped_cols = {"definition", "source", "notes"}
+        for i, col in enumerate(data_dictionary.columns):
+            dd_ws.set_column(
+                i, i, dd_widths.get(col, 24), wrap if col in wrapped_cols else None
+            )
 
     return out_path
