@@ -14,7 +14,12 @@ Design rules (from the task brief):
   prefix.
 * League config lives in ``config/leagues.yml`` and supports any number of
   leagues with no code change.
-* No keeper logic yet -- that is the immediate next iteration.
+* Optional per-league ``keepers`` (``manager`` / ``player_name`` /
+  ``prior_draft_round``). Keeper rule for this project: ``keeper_round =
+  prior_draft_round - 1``. The YAML is the source of truth -- no waiver / trade /
+  first-round / repeat-keeper special-casing. Each keeper blacks out its
+  manager's consumed pick cell and the kept player's name cell on that one
+  league sheet only.
 
 Snake draft: round 1 goes ``managers[0] .. managers[-1]``; round 2 reverses;
 odd rounds forward, even rounds reversed, for as many picks as there are rows in
@@ -36,12 +41,16 @@ from fantasy_football.transform.draft_checkpoint import ColumnSpec, build_data_d
 __all__ = [
     "LeagueConfig",
     "LeagueConfigError",
+    "Keeper",
+    "KeeperConfigError",
+    "KeeperResolution",
     "LEAGUE_COLUMNS",
     "LEAGUE_COLUMN_SCHEMA",
     "DEFAULT_LEAGUE_CONFIG",
     "load_league_configs",
     "snake_pick_table",
     "build_league_frame",
+    "resolve_keepers",
     "write_league_workbook",
 ]
 
@@ -84,6 +93,13 @@ _FREEZE_THROUGH = "position"
 
 #: Simple, readable highlight fill for "your slot is on the clock" rows.
 _HIGHLIGHT_COLOR = "#FFF2CC"  # pale amber
+
+#: Very light neutral gray for thin cell borders that mimic native Excel
+#: gridlines (which Excel hides on filled cells).
+_GRIDLINE = "#D9D9D9"
+
+#: Even-round ``rnd`` cell fill (odd rounds stay default/white).
+_RND_EVEN_FILL = "#E2E2E2"
 
 #: Pastel fills for the ``position`` cells (black text stays readable on all).
 _POSITION_FILLS = {
@@ -148,6 +164,29 @@ class LeagueConfigError(RuntimeError):
     """
 
 
+class KeeperConfigError(LeagueConfigError):
+    """A league's ``keepers`` block is invalid (bad manager, dup, round, no match).
+
+    Subclasses :class:`LeagueConfigError` so the pipeline's existing handler
+    still catches it; the distinct type just makes keeper failures easy to test.
+    """
+
+
+@dataclass(frozen=True)
+class Keeper:
+    """One keeper entry: config as-supplied, plus the derived keeper round."""
+
+    manager: str
+    player_name: str
+    prior_draft_round: int
+
+    @property
+    def keeper_round(self) -> int:
+        """This project's rule: the pick is consumed one round earlier."""
+
+        return self.prior_draft_round - 1
+
+
 @dataclass(frozen=True)
 class LeagueConfig:
     """One validated league entry from ``config/leagues.yml``."""
@@ -156,12 +195,72 @@ class LeagueConfig:
     num_teams: int
     draft_position: int
     managers: tuple[str, ...]
+    keepers: tuple[Keeper, ...] = ()
 
     @property
     def draft_position_manager(self) -> str:
         """Name of the manager occupying the config owner's snake slot."""
 
         return self.managers[self.draft_position - 1]
+
+
+def _parse_keepers(raw: Any, where: str, managers: tuple[str, ...]) -> tuple[Keeper, ...]:
+    """Validate an optional ``keepers`` list into :class:`Keeper` records.
+
+    Rules (kept deliberately narrow -- the YAML is the source of truth):
+
+    * absent key or empty list -> no keepers;
+    * each entry needs ``manager`` / ``player_name`` / ``prior_draft_round``;
+    * ``prior_draft_round`` is an integer >= 2;
+    * ``manager`` exactly matches one of this league's managers;
+    * at most one keeper per manager.
+
+    Player matching against the board happens later, in :func:`resolve_keepers`.
+    """
+
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise KeeperConfigError(f"{where}: keepers must be a list (omit the key for none)")
+
+    seen: set[str] = set()
+    out: list[Keeper] = []
+    for k, item in enumerate(raw, start=1):
+        at = f"{where}: keepers[{k}]"
+        if not isinstance(item, dict):
+            raise KeeperConfigError(f"{at} must be a mapping")
+        missing = [key for key in ("manager", "player_name", "prior_draft_round") if key not in item]
+        if missing:
+            raise KeeperConfigError(f"{at} is missing key(s): {', '.join(missing)}")
+
+        manager = item["manager"]
+        if not isinstance(manager, str) or not manager.strip():
+            raise KeeperConfigError(f"{at}.manager must be a non-blank string")
+        manager = manager.strip()
+        if manager not in managers:
+            raise KeeperConfigError(
+                f"{at}: manager '{manager}' is not one of this league's managers"
+            )
+        if manager in seen:
+            raise KeeperConfigError(
+                f"{where}: manager '{manager}' has more than one keeper (at most one allowed)"
+            )
+        seen.add(manager)
+
+        player_name = item["player_name"]
+        if not isinstance(player_name, str) or not player_name.strip():
+            raise KeeperConfigError(f"{at}.player_name must be a non-blank string")
+        player_name = player_name.strip()
+
+        prior = item["prior_draft_round"]
+        if isinstance(prior, bool) or not isinstance(prior, int) or prior < 2:
+            raise KeeperConfigError(
+                f"{at}: prior_draft_round must be an integer >= 2 (keeper '{player_name}'), got {prior!r}"
+            )
+
+        out.append(Keeper(manager=manager, player_name=player_name, prior_draft_round=prior))
+
+    return tuple(out)
 
 
 def _parse_one_league(index: int, entry: Any, source: Path) -> LeagueConfig:
@@ -217,11 +316,15 @@ def _parse_one_league(index: int, entry: Any, source: Path) -> LeagueConfig:
             f"{where}: draft_position must be between 1 and num_teams ({num_teams}), got {draft_position}"
         )
 
+    # keepers (optional) ----------------------------------------------
+    keepers = _parse_keepers(entry.get("keepers"), where, tuple(clean_managers))
+
     return LeagueConfig(
         league_name=name,
         num_teams=num_teams,
         draft_position=draft_position,
         managers=tuple(clean_managers),
+        keepers=keepers,
     )
 
 
@@ -343,6 +446,86 @@ def build_league_frame(
     return frame, highlight_rows
 
 
+# --- Keepers -------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class KeeperResolution:
+    """A keeper resolved against one league's board + snake schedule.
+
+    Row indices are 0-based positions in the league frame (row ``i`` of the
+    frame is overall pick ``i + 1``); the Excel writer adds 1 for the header.
+    """
+
+    keeper: Keeper
+    keeper_round: int
+    consumed_overall_pick: int  # the manager's own pick in ``keeper_round``
+    consumed_pick_row: int      # frame row of that consumed pick
+    kept_player_row: int        # frame row of the kept player
+
+
+def resolve_keepers(checkpoint_df: pd.DataFrame, cfg: LeagueConfig) -> list[KeeperResolution]:
+    """Resolve ``cfg.keepers`` against the shared board using the snake schedule.
+
+    For each keeper: exact ``player_name`` match (exactly one row required),
+    ``keeper_round = prior_draft_round - 1``, and the manager's own pick in that
+    round taken from :func:`snake_pick_table` (so even-round reversal is handled
+    by the same logic as the sheet).
+
+    Raises
+    ------
+    KeeperConfigError
+        If a keeper's player matches zero or multiple rows, or the derived
+        keeper round has no pick on this board.
+    """
+
+    if not cfg.keepers:
+        return []
+
+    base = checkpoint_df.reset_index(drop=True)
+    table = snake_pick_table(cfg.num_teams, len(base))
+    names = list(base["player_name"])
+
+    resolutions: list[KeeperResolution] = []
+    for kp in cfg.keepers:
+        matches = [i for i, nm in enumerate(names) if nm == kp.player_name]
+        if len(matches) != 1:
+            how = "no rows" if not matches else f"{len(matches)} rows"
+            raise KeeperConfigError(
+                f"league '{cfg.league_name}': keeper player '{kp.player_name}' "
+                f"(manager '{kp.manager}') matched {how} in the checkpoint board -- "
+                "exactly one exact-name match is required"
+            )
+        kept_player_row = matches[0]
+
+        consumed = next(
+            (
+                t
+                for t in table
+                if t["round"] == kp.keeper_round and cfg.managers[t["slot"] - 1] == kp.manager
+            ),
+            None,
+        )
+        if consumed is None:
+            raise KeeperConfigError(
+                f"league '{cfg.league_name}': keeper '{kp.player_name}' resolves to "
+                f"keeper_round {kp.keeper_round} for manager '{kp.manager}', which has no "
+                f"pick on this {len(base)}-row board"
+            )
+
+        resolutions.append(
+            KeeperResolution(
+                keeper=kp,
+                keeper_round=kp.keeper_round,
+                consumed_overall_pick=consumed["overall_pick"],
+                consumed_pick_row=consumed["overall_pick"] - 1,
+                kept_player_row=kept_player_row,
+            )
+        )
+
+    return resolutions
+
+
 # --- Workbook output ----------------------------------------------------
 
 
@@ -361,12 +544,13 @@ def _safe_sheet_name(name: str, used: set[str]) -> str:
     return candidate
 
 
-def _autofit_compact(worksheet, frame: pd.DataFrame, headers: list[str]) -> None:
+def _autofit_compact(worksheet, frame: pd.DataFrame, headers: list[str], default_fmt=None) -> None:
     """Size every column to its max content width (header + all values) + slim padding.
 
     Uses the full column, not a sample, so nothing is clipped. A small hard cap
     keeps one long free-text column from blowing out the sheet; in practice the
-    league sheets have no such column.
+    league sheets have no such column. ``default_fmt`` is applied as the column
+    default cell format (used for the subtle gridline border).
     """
 
     _blank = {"", "nan", "<NA>", "None", "NaN", "NaT"}
@@ -375,7 +559,7 @@ def _autofit_compact(worksheet, frame: pd.DataFrame, headers: list[str]) -> None
         # in recent pandas, so map explicitly and drop the blank renderings.
         rendered = [str(v) for v in frame[col].tolist()]
         longest = max([len(header)] + [len(v) for v in rendered if v not in _blank])
-        worksheet.set_column(i, i, max(3, min(longest + 1, 48)))
+        worksheet.set_column(i, i, max(3, min(longest + 1, 48)), default_fmt)
 
 
 def _league_dict_rows() -> pd.DataFrame:
@@ -413,6 +597,9 @@ def write_league_workbook(
     * ``position`` cells pastel-filled by value (RB/WR/QB/TE/DST/K);
     * pale-amber fill on rows where the league's ``draft_position`` slot is on
       the clock;
+    * for each configured keeper (this league only): a black / white-text fill
+      on the consumed pick's ``manager`` cell and on the kept player's
+      ``player_name`` cell -- nothing else in those rows;
     * every column sized to its max content width + slim padding.
 
     The ``data_dictionary`` sheet keeps its existing wrapped/readable formatting
@@ -431,7 +618,12 @@ def write_league_workbook(
 
     with pd.ExcelWriter(out_path, engine="xlsxwriter") as writer:
         book = writer.book
-        highlight_fmt = book.add_format({"bg_color": _HIGHLIGHT_COLOR})
+        # Thin light-gray border on every data cell so the grid stays visible
+        # through fills. Merged into every fill format below so filled and
+        # unfilled cells keep the same structure (no heavy/boundary borders).
+        _grid = {"border": 1, "border_color": _GRIDLINE}
+        grid_fmt = book.add_format(dict(_grid))
+        highlight_fmt = book.add_format({"bg_color": _HIGHLIGHT_COLOR, **_grid})
         wrap_fmt = book.add_format({"text_wrap": True, "valign": "top"})
         header_fmt = book.add_format(
             {
@@ -443,9 +635,16 @@ def write_league_workbook(
             }
         )
         position_fmts = {
-            pos: book.add_format({"bg_color": color})
+            pos: book.add_format({"bg_color": color, **_grid})
             for pos, color in _POSITION_FILLS.items()
         }
+        # keeper: black-out one manager cell + one player-name cell per keeper.
+        # Written as an explicit cell format, so it beats the amber row format.
+        keeper_fmt = book.add_format({"bg_color": "#000000", "font_color": "#FFFFFF", **_grid})
+        # `rnd` cells are written explicitly (below) with these formats so
+        # centering + round shading always win over the amber row format.
+        rnd_odd_fmt = book.add_format({"align": "center", **_grid})
+        rnd_even_fmt = book.add_format({"align": "center", "bg_color": _RND_EVEN_FILL, **_grid})
 
         used_names: set[str] = set()
         for cfg in leagues:
@@ -471,7 +670,9 @@ def write_league_workbook(
             # Freeze row 1 + columns through `position` inclusive (A:G).
             ws.freeze_panes(1, display_cols.index(_FREEZE_THROUGH) + 1)
             ws.autofilter(0, 0, n_rows, n_cols - 1)
-            _autofit_compact(ws, display, headers)
+            rnd_idx = display_cols.index("round")
+            # Grid border as the column default -> reaches every plain data cell.
+            _autofit_compact(ws, display, headers, grid_fmt)
 
             # Pastel fill on the `position` cells only, keyed by value.
             pos_idx = display_cols.index("position")
@@ -488,6 +689,22 @@ def write_league_workbook(
             # (+1 because Excel row 0 is the header).
             for r in highlight_rows:
                 ws.set_row(r + 1, None, highlight_fmt)
+
+            # `rnd` column: explicit per-cell write so centering + even/odd
+            # shading always beat the amber row format. Even rounds -> gray fill,
+            # odd rounds -> default background. Never touches other columns.
+            for i, rnd_val in enumerate(display["round"].tolist()):
+                fmt = rnd_even_fmt if int(rnd_val) % 2 == 0 else rnd_odd_fmt
+                ws.write(i + 1, rnd_idx, int(rnd_val), fmt)
+
+            # Keepers (optional, this league only): black out the consumed
+            # pick's `manager` cell and the kept player's `player_name` cell.
+            # Done last so the explicit cell format wins over any amber row.
+            manager_idx = display_cols.index("manager")
+            player_name_idx = display_cols.index("player_name")
+            for res in resolve_keepers(checkpoint_df, cfg):
+                ws.write(res.consumed_pick_row + 1, manager_idx, res.keeper.manager, keeper_fmt)
+                ws.write(res.kept_player_row + 1, player_name_idx, res.keeper.player_name, keeper_fmt)
 
         # --- data_dictionary sheet (last) -----------------------------
         dd_sheet = "data_dictionary"

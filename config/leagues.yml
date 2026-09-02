@@ -14,9 +14,20 @@
 #   managers        ordered list of manager names = round-1 pick order. The list
 #                   length MUST equal num_teams. Names must not be blank.
 #
+# Optional field per league:
+#   keepers         list of {manager, player_name, prior_draft_round}. Omit the
+#                   key or use [] for a league with no keepers. Rules:
+#                     - manager must exactly match one of this league's managers
+#                     - at most one keeper per manager
+#                     - prior_draft_round is an integer >= 2
+#                     - player_name must exactly match one checkpoint player
+#                   Effect: keeper_round = prior_draft_round - 1; on that league
+#                   sheet the manager's consumed pick cell (in keeper_round) and
+#                   the kept player's name cell are blacked out. Other leagues
+#                   are unaffected -- the player stays draftable there.
+#
 # Placeholder names below are safe to hand-edit later. "You" marks the slot that
 # matches `draft_position` purely as a convenience; renaming it changes nothing.
-# Keeper logic is intentionally NOT modelled yet -- that is the next iteration.
 
 # EXAMPLE CONFIGURATION (commented out) -- copy/paste and edit to add your own leagues
 # leagues:
@@ -36,6 +47,13 @@
 #       - "Manager 10"
 #       - "Manager 11"
 #       - "Manager 12"
+#     keepers:
+#       - manager: "Manager 03"
+#         player_name: "Javonte Williams"
+#         prior_draft_round: 8
+#       - manager: "Manager 08"
+#         player_name: "Tony Pollard"
+#         prior_draft_round: 6
 
 
 leagues:
@@ -55,6 +73,27 @@ leagues:
       - "Joe"
       - "Brian"
       - "McGarry"
+    keepers: # e.g. - {manager: "Brad", player_name: "Javonte Williams", prior_draft_round: 8}
+      - manager: "Brad" 
+        player_name: "Javonte Williams" 
+        prior_draft_round: 8
+      - manager: "Shy"
+        player_name: "Tony Pollard"
+        prior_draft_round: 6
+      - manager: "Novacki"
+        player_name: "Jaxon Smith-Njigba"
+        prior_draft_round: 3
+      - manager: "Kweez"
+        player_name: "George Pickens"
+        prior_draft_round: 5
+      - manager: "Mun"
+        player_name: "Matthew Stafford"
+        prior_draft_round: 13
+      - manager: "Mac"
+        player_name: "Ashton Jeanty"
+        prior_draft_round: 12
+        
+
 
   - league_name: "Cherri"
     num_teams: 10
@@ -70,6 +109,7 @@ leagues:
       - "Derrick"
       - "Scott/Jeb"
       - "Pete/Novacki"
+    keepers: []
 
   - league_name: "Draft Queens"
     num_teams: 12
@@ -87,4 +127,5 @@ leagues:
       - "Kim"
       - "Sami"
       - "Whitney"
+    keepers: []
 

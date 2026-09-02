@@ -25,8 +25,7 @@ One Excel workbook: **one sheet per configured league**, then a
   format, known caveats). Generated from maintained metadata in code, so it
   always matches the columns actually exported.
 
-It's a review checkpoint, not a polished draft-day workbook yet. Keeper picks
-are **not** modelled yet — that's the next iteration.
+It's a review checkpoint, not a polished draft-day workbook yet.
 
 ## League configuration
 
@@ -39,12 +38,33 @@ file only — no code changes. Each entry needs:
 | `num_teams` | Number of draft slots. |
 | `draft_position` | **Your** snake slot, `1..num_teams`; drives row highlighting. |
 | `managers` | Ordered list = round-1 pick order. Length **must** equal `num_teams`; no blank names. |
+| `keepers` | *Optional.* List of kept players (see below). Omit the key or use `[]` for none. |
 
-The checked-in file has three leagues — **The Boys**, **Cherri**, and a
-**Placeholder League** — with placeholder manager names (`Manager 01…`, and
-`You` marking your slot). Edit them by hand with the real names/slots. The
-pipeline validates the config on every run and fails with a clear,
+The pipeline validates the config on every run and fails with a clear,
 league-named message if a rule is broken.
+
+### Keepers (optional)
+
+Each `keepers` entry is `{ manager, player_name, prior_draft_round }`:
+
+```yaml
+    keepers:
+      - manager: "Brad"
+        player_name: "Javonte Williams"
+        prior_draft_round: 8
+```
+
+Rules: `manager` must exactly match one of that league's `managers`; at most one
+keeper per manager; `prior_draft_round` is an integer `>= 2`; `player_name` must
+exactly match one player on the board (no fuzzy matching). The keeper's pick is
+consumed one round earlier — `keeper_round = prior_draft_round - 1` — and its
+position within that round follows the normal snake reversal.
+
+On that league's sheet only, two cells are blacked out (white text): the
+manager's consumed pick cell in `keeper_round`, and the kept player's
+`player_name` cell (the player stays normally draftable on every other league
+sheet). Nothing else changes — snake order, amber user-slot highlighting, and
+non-keeper leagues are untouched.
 
 ## Setup / prerequisites
 
