@@ -77,9 +77,6 @@ leagues:
       - manager: "Brad" 
         player_name: "Javonte Williams" 
         prior_draft_round: 8
-      - manager: "Shy"
-        player_name: "Tony Pollard"
-        prior_draft_round: 6
       - manager: "Novacki"
         player_name: "Jaxon Smith-Njigba"
         prior_draft_round: 3
@@ -89,9 +86,20 @@ leagues:
       - manager: "Mun"
         player_name: "Matthew Stafford"
         prior_draft_round: 13
-      - manager: "Mac"
-        player_name: "Ashton Jeanty"
-        prior_draft_round: 12
+      - manager: "Joe"
+        player_name: "Jonathan Taylor"
+        prior_draft_round: 2
+      - manager: "Regg"
+        player_name: "Quinshon Judkins"
+        prior_draft_round: 13
+      # - manager: "Mac". # TBD on Mac
+      #   player_name: "Ashton Jeanty"
+      #   prior_draft_round: 12
+      # - manager: "Shy"
+      #   player_name: "Tony Pollard"
+      #   prior_draft_round: 6
+
+      # Not keeping anyone: Mac, McGarry, Shy
         
 
 
