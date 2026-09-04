@@ -57,6 +57,8 @@ from typing import Any, Iterable
 
 import pandas as pd
 
+from fantasy_football.enrich.manual import apply_manual_enrichment
+
 __all__ = [
     "ColumnSpec",
     "CHECKPOINT_SCHEMA",
@@ -198,6 +200,20 @@ CHECKPOINT_SCHEMA: tuple[ColumnSpec, ...] = (
         "Same underlying source field as `rank_avg`.",
     ),
     ColumnSpec(
+        "espn_order",
+        "Primary draft decision fields",
+        "Current ESPN draft-room player ordering (1 = first player off the board "
+        "on ESPN, ascending).",
+        "Curated file `data/manual/2026/espn_draft_order_2026.csv` (Hashtag "
+        "Football ESPN ADP page, source-updated 2026-08-31), LEFT JOIN on exact "
+        "`player_name`.",
+        "Third-party proxy for ESPN order, NOT an official ESPN export. Covers "
+        "roughly the top ~216; missing means the player is outside that known "
+        "ESPN source coverage -- not zero and not undrafted. Drives the row order "
+        "of league sheets whose `draft_platform` is `espn`; ignored for other "
+        "platforms.",
+    ),
+    ColumnSpec(
         "adp_vs_ecr",
         "Primary draft decision fields",
         "Derived: `consensus_adp_half - rank_ecr`.",
@@ -223,6 +239,34 @@ CHECKPOINT_SCHEMA: tuple[ColumnSpec, ...] = (
         "Currently always empty: the production `experts=show` consensus response "
         "omits the per-player `tier` field. Column retained for schema stability; "
         "values are not fabricated.",
+    ),
+    ColumnSpec(
+        "hartman_tier",
+        "Primary draft decision fields",
+        "Positional draft tier (1 = best within the position) from David "
+        "Hartman's final 2026 positional rankings, Big Blue View / SB Nation.",
+        "Curated file `data/manual/2026/positional_tiers_2026.csv`, rows where "
+        "`tier_source == 'David Hartman / Big Blue View'`, LEFT JOIN on exact "
+        "`player_name` (source position cross-checked against the checkpoint).",
+        "Half-PPR for RB/WR/TE; the QB article uses 4-pt passing TDs. Tiers are "
+        "per-position -- only compare within a position. TE tiers 5/6 are the "
+        "curator's numeric normalization of the article's repeated `Tier IV` "
+        "headings. Missing means the player was not tiered in those articles -- "
+        "not zero. Independent of `tier` and `ringer_tier`.",
+    ),
+    ColumnSpec(
+        "ringer_tier",
+        "Primary draft decision fields",
+        "Positional draft tier (1 = best within the position) from The Ringer "
+        "Fantasy Football Show, limited to assignments explicitly stated in the "
+        "public episode summaries.",
+        "Curated file `data/manual/2026/positional_tiers_2026.csv`, rows where "
+        "`tier_source == 'The Ringer Fantasy Football Show'`, LEFT JOIN on exact "
+        "`player_name` (source position cross-checked against the checkpoint).",
+        "Sparse by design: only RB/QB/TE and only the tiers named in the "
+        "summaries (no WR rows). Missing is genuinely unknown and is never "
+        "inferred or filled from another source. Per-position, like "
+        "`hartman_tier`. Independent of `tier` and `hartman_tier`.",
     ),
     # --- ranking distribution -------------------------------------------
     ColumnSpec(
@@ -504,7 +548,11 @@ def _load_player_points_2025(raw_dir: Path) -> pd.DataFrame:
 # --- Public API -----------------------------------------------------------
 
 
-def build_draft_checkpoint(raw_dir: str | Path | None = None) -> pd.DataFrame:
+def build_draft_checkpoint(
+    raw_dir: str | Path | None = None,
+    *,
+    manual_dir: str | Path | None = None,
+) -> pd.DataFrame:
     """Build the consolidated 2026 half-PPR draft checkpoint dataframe.
 
     Parameters
@@ -512,6 +560,9 @@ def build_draft_checkpoint(raw_dir: str | Path | None = None) -> pd.DataFrame:
     raw_dir:
         Directory holding the cached raw JSON payloads. Defaults to
         :data:`DEFAULT_RAW_DIR` (``<repo>/data/raw``).
+    manual_dir:
+        Root of the curated ``data/manual/`` enrichment inputs. Defaults to
+        :data:`fantasy_football.enrich.manual.DEFAULT_MANUAL_DIR`.
 
     Returns
     -------
@@ -543,7 +594,14 @@ def build_draft_checkpoint(raw_dir: str | Path | None = None) -> pd.DataFrame:
     #    this is a small residual here rather than a true market-vs-ECR gap.
     df["adp_vs_ecr"] = df["consensus_adp_half"] - df["rank_ecr"]
 
-    # 4. lock column order (every name in CHECKPOINT_COLUMNS is now present)
+    # 4. curated manual enrichment (data/manual/): ESPN draft-room order plus
+    #    source-specific positional tiers, joined by exact player_name. Kept in
+    #    its own module (fantasy_football.enrich.manual) so a future automated
+    #    source can replace the CSVs without touching this transform. Still a
+    #    LEFT JOIN onto the spine -- no player is dropped, missing stays <NA>.
+    df = apply_manual_enrichment(df, manual_dir=manual_dir)
+
+    # 5. lock column order (every name in CHECKPOINT_COLUMNS is now present)
     return df[CHECKPOINT_COLUMNS].copy()
 
 
@@ -564,6 +622,9 @@ def checkpoint_coverage_report(df: pd.DataFrame) -> dict[str, Any]:
         "2025_points_half",
         "2025_ppg_half",
         "tier",
+        "espn_order",
+        "hartman_tier",
+        "ringer_tier",
     ]
     n = len(df)
     return {

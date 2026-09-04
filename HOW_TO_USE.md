@@ -11,21 +11,46 @@ One Excel workbook: **one sheet per configured league**, then a
 - **League sheets** (one per entry in `config/leagues.yml`, in file order) —
   the shared ~365-player half-PPR board (FantasyPros consensus universe:
   consensus ranking / ADP, per-platform ADP for Yahoo, RTSports, Sleeper, ESPN,
-  2026 projected points, 2025 actual points, a few derived columns) with four
-  **snake-draft context columns prepended**, shown left-to-right as
-  `manager | pick | rnd | rnd_pick` then `player_name | team | position` (those
-  three headers are display labels for the internal `overall_pick`, `round`,
-  `pick_in_round`). Columns A:G and the header row are frozen. Rows where *your*
-  configured `draft_position` slot is on the clock are highlighted (pale amber),
-  following the forward/reverse snake order; `position` cells are pastel-shaded
-  by slot (RB/WR/QB/TE/DST/K). The player board itself is identical across
-  league sheets — only the prefix, freeze, and highlight differ.
+  2026 projected points, 2025 actual points, a few derived columns, plus the
+  curated `espn_order` and the source-specific `hartman_tier` / `ringer_tier`
+  columns) with four **snake-draft context columns prepended**, shown
+  left-to-right as `manager | pick | rnd | rnd_pick` then
+  `player_name | team | position | hartman_tier | ringer_tier | pos_rank | bye_wk`,
+  then the remaining board columns in their existing order (`pick / rnd /
+  rnd_pick` are display labels for the internal `overall_pick`, `round`,
+  `pick_in_round`; `hartman_tier` / `ringer_tier` keep their independent meaning
+  and are **not** the FantasyPros `tier` column, which stays further right).
+  Columns A:G (through `position`) and the header row are frozen. Rows where
+  *your* configured `draft_position` slot is on the clock are highlighted (pale
+  amber), following the forward/reverse snake order; `position` cells are
+  pastel-shaded by slot (RB/WR/QB/TE/DST/K).
+  - **Row order** depends on the league's `draft_platform`. An `espn` league
+    (The Boys, Cherri) sorts by the sourced `espn_order`; where that is missing,
+    `consensus_adp_half` is used **only as an internal fallback sort key** so
+    those players interleave by market ADP instead of dropping to the bottom.
+    The `espn_order` value itself is never imputed — it stays blank where the
+    source had none. Players missing both values stay after every usable-sort
+    player, in stable checkpoint order. A `sleeper` league (Draft Queens) keeps
+    the shared checkpoint order unchanged and is the standing non-ESPN
+    regression case. The `pick / rnd / rnd_pick / manager` columns are numbered
+    **after** this reordering.
+  - **Tier colours:** `hartman_tier` and `ringer_tier` cells use persistent
+    conditional formatting — one fixed colour per tier value 1–8, green (better /
+    low number) → yellow → orange → red (worse / high number). Only the tier
+    cells are coloured; blank tier cells get no fill. If you type a valid tier
+    into a blank tier cell in Excel, the colour appears automatically.
+  - Apart from row order + the snake prefix + freeze/highlight + tier colours,
+    the player board is identical across league sheets.
 - **`data_dictionary`** — one row per output column (shared columns + the four
   league columns): definition, source, notes (missing-value meaning, scoring
   format, known caveats). Generated from maintained metadata in code, so it
   always matches the columns actually exported.
 
-It's a review checkpoint, not a polished draft-day workbook yet.
+This is the draft-day workbook. It is regenerated from scratch on every
+pipeline run, so **any edits you make directly in a generated file (including
+tiers you type into blank cells) are lost the next time you run the pipeline.**
+For a live draft, work from a separate copy, or make lasting changes in the
+source inputs (`config/leagues.yml`, `data/manual/`) and re-run.
 
 ## League configuration
 
@@ -38,6 +63,7 @@ file only — no code changes. Each entry needs:
 | `num_teams` | Number of draft slots. |
 | `draft_position` | **Your** snake slot, `1..num_teams`; drives row highlighting. |
 | `managers` | Ordered list = round-1 pick order. Length **must** equal `num_teams`; no blank names. |
+| `draft_platform` | *Optional.* `espn` or `sleeper` (default `sleeper`). `espn` orders that sheet by `espn_order` (fallback: `consensus_adp_half`, internal only); `sleeper` keeps the shared checkpoint order. |
 | `keepers` | *Optional.* List of kept players (see below). Omit the key or use `[]` for none. |
 
 The pipeline validates the config on every run and fails with a clear,
@@ -145,10 +171,15 @@ numbers.
 | What | Location |
 | --- | --- |
 | Raw API caches (JSON) | `data/raw/` |
+| Curated enrichment CSVs (ESPN order, positional tiers) | `data/manual/` |
 | League config (YAML) | `config/leagues.yml` |
 | Generated Excel outputs | `outputs/` |
 
-Both directories are git-ignored.
+`data/raw/` and `outputs/` are git-ignored; `data/manual/` is not (it is
+curated input meant to be version-controlled, not machine-ingested raw). To
+refresh the manual layer, edit the
+CSVs under `data/manual/2026/` in place — no flag needed, the default run picks
+them up. See `data/manual/README.md` for what each file is and its provenance.
 
 The default output filename is date-stamped with the day you run it:
 

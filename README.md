@@ -32,12 +32,17 @@ Build a consolidated, player-level dataset for the 2026 fantasy football half-PP
 - ADP vs. ECR
 - Other useful draft-ranking or projection fields discovered during development
 
-Manual / user-maintained fields may include:
-- Ringer Tier
+Manual / user-maintained fields (curated under `data/manual/`, joined by exact
+player name — see "Manual enrichment layer" below):
+- ESPN draft-room order (`espn_order`)
+- Source-specific positional tiers (`hartman_tier`, `ringer_tier`), kept
+  separate from the FantasyPros `tier` column
 - League-specific draft tracking fields
 
-The primary near-term output is one consolidated Excel sheet suitable for use
-during a live fantasy draft. Separate position-specific sheets are lower priority for v1.
+The primary near-term output is one Excel workbook with **one worksheet per
+configured league** (the shared player board plus that league's snake-draft
+context columns) followed by a `data_dictionary` sheet. Separate
+position-specific sheets are lower priority for v1.
 
 ## Reference Implementation
 
@@ -53,10 +58,12 @@ schema or workbook structure as a requirement.
 The 2026 implementation should prioritize a consolidated, league-wide player
 dataset and may improve, simplify, or replace elements of the 2024 workbook.
 
-The current leagues are "The Boys" and "Cherri," corresponding to the two
-primary league-specific tabs in the reference workbook. The "ADP" tab is a
-good starting point for the initial API dataset. League-specific and manually
-maintained fields can then be added for v1.
+The configured leagues are "The Boys" (ESPN), "Cherri" (ESPN) and "Draft
+Queens" (Sleeper); the first two correspond to the primary league-specific tabs
+in the reference workbook. Leagues are defined entirely in `config/leagues.yml`
+(any number, no code changes). The "ADP" tab is a good starting point for the
+initial API dataset. League-specific and manually maintained fields are layered
+on top for v1.
 
 ## Data Sources
 
@@ -83,22 +90,68 @@ Transformation status:
 - First reusable transformation layer exists at
   `src/fantasy_football/transform/`. It merges the cached raw payloads into one
   shared consolidated player-level board (`data_dictionary` metadata generated
-  from the maintained column schema in `transform/draft_checkpoint.py`).
-- League-specific draft sheets (MVP) live in `src/fantasy_football/leagues.py`,
+  from the maintained column schema in `transform/draft_checkpoint.py`), then
+  left-joins the curated `data/manual/` enrichment (see below).
+- League-specific draft sheets live in `src/fantasy_football/leagues.py`,
   driven by `config/leagues.yml` (any number of leagues, no code changes). Each
   league sheet is the shared board with four snake-draft columns prepended
   (`overall_pick`, `round`, `pick_in_round`, `manager`) and the user's
-  `draft_position` picks highlighted. Keeper logic is not modelled yet.
+  `draft_position` picks highlighted.
+  - **Platform ordering** (`draft_platform` in `config/leagues.yml`): a
+    `draft_platform: espn` league (The Boys, Cherri) sorts its sheet by the
+    sourced `espn_order`. Where `espn_order` is missing, `consensus_adp_half` is
+    used **only as an internal fallback sort key** — the exported `espn_order`
+    field itself stays null when the source has no value, and is never imputed.
+    Players missing both values stay after every usable-sort player, in stable
+    checkpoint order. Snake metadata (`overall_pick` / `round` / `pick_in_round`
+    / `manager`) is generated against the **final displayed ordering**. Any
+    other platform (`sleeper` — Draft Queens) keeps the shared checkpoint order
+    unchanged; Draft Queens doubles as the non-ESPN regression case.
+  - **Keepers** are implemented and config-driven (optional, per league):
+    `config/leagues.yml` `keepers: [{manager, player_name, prior_draft_round}]`.
+    The keeper's pick is consumed one round earlier
+    (`keeper_round = prior_draft_round - 1`); on that league's sheet the consumed
+    pick cell and the kept player's name cell are blacked out. Other league
+    sheets are unaffected.
+  - **Tier cells** (`hartman_tier`, `ringer_tier`) carry persistent conditional
+    formatting: one fixed colour per tier value 1–8, a green (better / low
+    number) → yellow → orange → red (worse / high number) progression, applied
+    to the tier cells only. Blank tier cells get no fill; typing a valid tier
+    into a blank cell in Excel triggers the colour automatically. The FantasyPros
+    `tier` column is independent and left as-is.
 - The pipeline exports a date-stamped workbook
   (`outputs/fantasy_draft_checkpoint_YYYY_MM_DD.xlsx`): one worksheet per
-  league, then `data_dictionary`. This is a review checkpoint, not the final
-  draft-day workbook.
+  configured league, then `data_dictionary`. This is the draft-day workbook, but
+  it is regenerated from scratch on every run — edits made directly in a
+  generated file are lost the next time the pipeline runs, so keep a separate
+  live draft copy.
+
+## Manual enrichment layer
+
+Some draft-prep fields are not (yet) produced by an automated ingestion. They
+live as curated, source-attributed CSVs under `data/manual/` and are loaded by
+`src/fantasy_football/enrich/manual.py`, which is deliberately separate from the
+FantasyPros API extraction:
+
+- `data/manual/2026/espn_draft_order_2026.csv` → `espn_order` (third-party proxy
+  for ESPN draft-room order; drives ESPN league sheet ordering).
+- `data/manual/2026/positional_tiers_2026.csv` → `hartman_tier` and
+  `ringer_tier` (long-form, multi-source; each source stays in its own column,
+  and the FantasyPros `tier` column is left untouched).
+
+Everything joins onto the shared board by **exact `player_name`** as a LEFT
+JOIN: no checkpoint player is dropped, missing values stay `<NA>` (never zero,
+never inferred across sources). `data/manual/` is treated as *replaceable* —
+a future scraper/agent can emit the same columns without changing downstream
+code. See `data/manual/README.md` for source provenance and caveats.
 
 ## Architecture
 
 Initial:
 
-API → raw JSON (`data/raw/`) → transformation layer (`src/fantasy_football/transform/`) → consolidated board → Excel checkpoint (`outputs/`)
+API → raw JSON (`data/raw/`) ─┐
+                              ├─→ transformation layer (`src/fantasy_football/transform/`) → consolidated board → league sheets (`src/fantasy_football/leagues.py`) → Excel checkpoint (`outputs/`)
+curated `data/manual/` ───────┘  (via `src/fantasy_football/enrich/`)
 
 Future:
 
@@ -110,8 +163,12 @@ APIs → raw storage / AWS → transformation layer → Databricks → analytics
 - `docs/` - project and API documentation
 - `notebooks/` - exploratory analysis and API experimentation
 - `reference/` - historical/reference artifacts from prior implementations
-- `src/` - reusable Python pipeline code
+- `src/` - reusable Python pipeline code (`extract/`, `transform/`, `enrich/`,
+  `leagues.py`, `pipeline.py`)
 - `data/raw/` - cached raw API responses (not committed)
+- `data/manual/` - human/AI-curated, source-attributed enrichment CSVs
+  (version-controlled — unlike `data/raw/` — as replaceable inputs, not
+  machine-ingested raw)
 - `data/processed/` - transformed datasets
 - `outputs/` - generated draft-preparation files (not committed)
 

@@ -15,6 +15,14 @@
 #                   length MUST equal num_teams. Names must not be blank.
 #
 # Optional field per league:
+#   draft_platform  draft host, one of: espn | sleeper. Default: sleeper.
+#                   Only "espn" changes behaviour: that league's sheet is
+#                   ordered by the curated ESPN draft-room order (`espn_order`,
+#                   from data/manual/), with unknown-order players kept in
+#                   checkpoint order after the known block. All snake-draft
+#                   context columns (pick / round / manager) are assigned AFTER
+#                   that reordering. Non-espn leagues keep the shared checkpoint
+#                   order exactly.
 #   keepers         list of {manager, player_name, prior_draft_round}. Omit the
 #                   key or use [] for a league with no keepers. Rules:
 #                     - manager must exactly match one of this league's managers
@@ -60,6 +68,7 @@ leagues:
   - league_name: "The Boys"
     num_teams: 12
     draft_position: 3
+    draft_platform: espn
     managers:
       - "Kweez"
       - "Mun"
@@ -106,6 +115,7 @@ leagues:
   - league_name: "Cherri"
     num_teams: 10
     draft_position: 6
+    draft_platform: espn
     managers:
       - "Bill Pax"
       - "Will Byrne"
@@ -122,6 +132,7 @@ leagues:
   - league_name: "Draft Queens"
     num_teams: 12
     draft_position: 2
+    draft_platform: sleeper
     managers:
       - "Marissa"
       - "Lisa"

@@ -46,13 +46,25 @@ __all__ = [
     "KeeperResolution",
     "LEAGUE_COLUMNS",
     "LEAGUE_COLUMN_SCHEMA",
+    "DRAFT_PLATFORMS",
     "DEFAULT_LEAGUE_CONFIG",
     "load_league_configs",
     "snake_pick_table",
+    "order_board_for_platform",
     "build_league_frame",
     "resolve_keepers",
     "write_league_workbook",
 ]
+
+#: Recognised ``draft_platform`` values. Only ``"espn"`` changes behaviour
+#: (see :func:`order_board_for_platform`); every other recognised platform keeps
+#: the shared checkpoint order. Kept as data so sorting logic never has to name
+#: a league.
+DRAFT_PLATFORMS: tuple[str, ...] = ("espn", "sleeper")
+
+#: Fallback platform when a league entry omits ``draft_platform``. Chosen so an
+#: un-annotated league keeps the pre-existing (shared checkpoint) ordering.
+_DEFAULT_DRAFT_PLATFORM = "sleeper"
 
 
 # --- Locations --------------------------------------------------------------
@@ -68,9 +80,13 @@ LEAGUE_COLUMNS = ["overall_pick", "round", "pick_in_round", "manager"]
 
 # --- Excel-only presentation (does NOT touch dataframe column names/order) ---
 
-#: Left-most column order shown in each league worksheet. Everything after
-#: ``position`` keeps the shared checkpoint column order. The dataframe returned
-#: by :func:`build_league_frame` is unaffected.
+#: Left-most column order shown in each league worksheet. The two source-specific
+#: tier columns and ``pos_rank`` / ``bye_wk`` are pulled up next to
+#: ``position`` for at-a-glance draft reads; everything after ``bye_wk`` keeps
+#: the shared checkpoint column order. Presentation only -- the dataframe
+#: returned by :func:`build_league_frame` is unaffected, and the tier fields keep
+#: their independent meaning (``hartman_tier`` / ``ringer_tier`` are NOT the
+#: FantasyPros ``tier`` column, which stays in its usual place).
 _LEAGUE_SHEET_LEAD_ORDER = [
     "manager",
     "overall_pick",
@@ -79,6 +95,10 @@ _LEAGUE_SHEET_LEAD_ORDER = [
     "player_name",
     "team",
     "position",
+    "hartman_tier",
+    "ringer_tier",
+    "pos_rank",
+    "bye_wk",
 ]
 
 #: Header labels used in the Excel league sheets only (internal names unchanged).
@@ -114,6 +134,23 @@ _POSITION_FILLS = {
 #: League-sheet header style: centered, bold, white-on-blue.
 _HEADER_FILL = "#4472C4"
 
+#: Discrete per-tier fills for ``hartman_tier`` / ``ringer_tier`` cells. One
+#: fixed colour per numeric tier (1..8) so a tier always reads the same, applied
+#: as conditional formatting so a value typed into a blank cell later colours
+#: itself. Blank cells match no rule and stay unfilled. Light/desaturated with
+#: dark text; darker tiers (7/8) pair a light fill with a strong font colour so
+#: text stays readable without a saturated background.
+_TIER_FILLS: dict[int, tuple[str, str]] = {
+    1: ("#2E7D32", "#FFFFFF"),  # dark green  / white text
+    2: ("#66BB6A", "#1B1B1B"),  # medium green
+    3: ("#A5D6A7", "#1B1B1B"),  # light green
+    4: ("#DCE775", "#1B1B1B"),  # pale yellow-green
+    5: ("#FFF176", "#1B1B1B"),  # yellow
+    6: ("#FFB74D", "#1B1B1B"),  # orange
+    7: ("#EF9A9A", "#1B1B1B"),  # light red
+    8: ("#E57373", "#FFFFFF"),  # darker red / white text
+}
+
 
 #: Data-dictionary metadata for the four league-specific columns. Kept beside
 #: the checkpoint schema's :data:`~fantasy_football.transform.draft_checkpoint.CHECKPOINT_SCHEMA`
@@ -122,9 +159,13 @@ LEAGUE_COLUMN_SCHEMA: tuple[ColumnSpec, ...] = (
     ColumnSpec(
         "overall_pick",
         "Draft context (league-specific)",
-        "Overall draft pick number, 1..N -- one per checkpoint row, in the shared "
-        "checkpoint ranking order.",
-        "Derived per league from `config/leagues.yml` (`num_teams`).",
+        "Overall draft pick number, 1..N -- one per board row, assigned AFTER "
+        "platform-specific ordering. `espn` leagues are ordered by `espn_order`, "
+        "falling back to `consensus_adp_half` where the ESPN source has no value "
+        "(players missing both keep checkpoint order and follow last); other "
+        "platforms keep the shared checkpoint order.",
+        "Derived per league from `config/leagues.yml` (`num_teams`, "
+        "`draft_platform`).",
         "Shown in the Excel league sheets as `pick`.",
     ),
     ColumnSpec(
@@ -146,7 +187,8 @@ LEAGUE_COLUMN_SCHEMA: tuple[ColumnSpec, ...] = (
         "manager",
         "Draft context (league-specific)",
         "Manager on the clock for this pick under snake order: odd rounds go "
-        "`managers[0]..managers[-1]`, even rounds reversed.",
+        "`managers[0]..managers[-1]`, even rounds reversed. Snake positions are "
+        "assigned over the platform-ordered board (see `overall_pick`).",
         "Derived per league from `config/leagues.yml` (`managers`).",
         "Rows where the on-the-clock slot equals the league's `draft_position` "
         "are highlighted in the sheet.",
@@ -196,6 +238,11 @@ class LeagueConfig:
     draft_position: int
     managers: tuple[str, ...]
     keepers: tuple[Keeper, ...] = ()
+    #: Draft host for this league. Drives platform-specific board ordering: an
+    #: ``"espn"`` league sheet is ordered by the curated ``espn_order``; any
+    #: other value keeps the shared checkpoint order. Defaults to
+    #: :data:`_DEFAULT_DRAFT_PLATFORM` when omitted in YAML.
+    draft_platform: str = _DEFAULT_DRAFT_PLATFORM
 
     @property
     def draft_position_manager(self) -> str:
@@ -319,12 +366,24 @@ def _parse_one_league(index: int, entry: Any, source: Path) -> LeagueConfig:
     # keepers (optional) ----------------------------------------------
     keepers = _parse_keepers(entry.get("keepers"), where, tuple(clean_managers))
 
+    # draft_platform (optional) --------------------------------------
+    raw_platform = entry.get("draft_platform", _DEFAULT_DRAFT_PLATFORM)
+    if not isinstance(raw_platform, str) or not raw_platform.strip():
+        raise LeagueConfigError(f"{where}: draft_platform must be a non-blank string")
+    platform = raw_platform.strip().lower()
+    if platform not in DRAFT_PLATFORMS:
+        raise LeagueConfigError(
+            f"{where}: draft_platform '{raw_platform}' is not recognised "
+            f"(expected one of: {', '.join(DRAFT_PLATFORMS)})"
+        )
+
     return LeagueConfig(
         league_name=name,
         num_teams=num_teams,
         draft_position=draft_position,
         managers=tuple(clean_managers),
         keepers=keepers,
+        draft_platform=platform,
     )
 
 
@@ -415,6 +474,44 @@ def snake_pick_table(num_teams: int, num_picks: int) -> list[dict[str, int]]:
     return rows
 
 
+def order_board_for_platform(
+    checkpoint_df: pd.DataFrame, cfg: LeagueConfig
+) -> pd.DataFrame:
+    """Return the shared board reordered for ``cfg``'s draft platform.
+
+    * ``draft_platform == "espn"`` -> stable sort by a fallback ordering key:
+      ``espn_order`` when the curated ESPN source has it, otherwise
+      ``consensus_adp_half`` (both are on the same ~1..N draft-slot scale, so a
+      fallback player interleaves naturally among the ESPN-ordered players).
+      Players missing *both* keep their existing relative checkpoint order and
+      follow after every player that has a usable key. Nothing is dropped, and
+      the exported ``espn_order`` column is never mutated -- it stays ``<NA>``
+      wherever the source had no value; the fallback lives only in this local
+      sort key.
+    * any other platform -> the shared checkpoint order, unchanged.
+
+    The reorder happens here, *before* :func:`snake_pick_table` is applied, so the
+    draft-context columns a league sheet shows (``overall_pick`` / ``round`` /
+    ``pick_in_round`` / ``manager``) always line up with the final displayed row
+    order.
+    """
+
+    base = checkpoint_df.reset_index(drop=True)
+    if cfg.draft_platform != "espn" or "espn_order" not in base.columns:
+        return base
+
+    # Local ordering key only -- not written back to the frame. espn_order wins;
+    # consensus_adp_half fills the gaps; rows with neither sort last.
+    order_key = base["espn_order"].astype("Float64")
+    if "consensus_adp_half" in base.columns:
+        order_key = order_key.fillna(base["consensus_adp_half"].astype("Float64"))
+
+    # kind="stable" (mergesort) keeps the input order of equal keys and of the
+    # trailing NaN block; na_position="last" puts both-missing players after.
+    ordered_index = order_key.sort_values(kind="stable", na_position="last").index
+    return base.loc[ordered_index].reset_index(drop=True)
+
+
 def build_league_frame(
     checkpoint_df: pd.DataFrame, cfg: LeagueConfig
 ) -> tuple[pd.DataFrame, list[int]]:
@@ -423,13 +520,14 @@ def build_league_frame(
     Returns
     -------
     (frame, highlight_rows)
-        ``frame`` is ``checkpoint_df`` with :data:`LEAGUE_COLUMNS` prepended
+        ``frame`` is the platform-ordered board (see
+        :func:`order_board_for_platform`) with :data:`LEAGUE_COLUMNS` prepended
         (all shared columns preserved, in order, after them).
         ``highlight_rows`` is the 0-based positional row indices where the
         config owner's ``draft_position`` slot is on the clock.
     """
 
-    base = checkpoint_df.reset_index(drop=True)
+    base = order_board_for_platform(checkpoint_df, cfg)
     table = snake_pick_table(cfg.num_teams, len(base))
 
     lead = pd.DataFrame(
@@ -482,7 +580,10 @@ def resolve_keepers(checkpoint_df: pd.DataFrame, cfg: LeagueConfig) -> list[Keep
     if not cfg.keepers:
         return []
 
-    base = checkpoint_df.reset_index(drop=True)
+    # Resolve keeper rows against the SAME row order the league sheet will show
+    # (ESPN leagues are reordered by espn_order), so the blacked-out player /
+    # consumed-pick cells land on the right rows.
+    base = order_board_for_platform(checkpoint_df, cfg)
     table = snake_pick_table(cfg.num_teams, len(base))
     names = list(base["player_name"])
 
@@ -638,6 +739,12 @@ def write_league_workbook(
             pos: book.add_format({"bg_color": color, **_grid})
             for pos, color in _POSITION_FILLS.items()
         }
+        # One fixed format per tier value (1..8), reused for hartman_tier and
+        # ringer_tier. Grid border merged in so the subtle gridlines survive.
+        tier_fmts = {
+            tier: book.add_format({"bg_color": bg, "font_color": fg, **_grid})
+            for tier, (bg, fg) in _TIER_FILLS.items()
+        }
         # keeper: black-out one manager cell + one player-name cell per keeper.
         # Written as an explicit cell format, so it beats the amber row format.
         keeper_fmt = book.add_format({"bg_color": "#000000", "font_color": "#FFFFFF", **_grid})
@@ -684,6 +791,20 @@ def write_league_workbook(
                     pos_idx,
                     {"type": "cell", "criteria": "==", "value": f'"{pos}"', "format": fmt},
                 )
+
+            # Discrete per-tier fills for the two tier columns. Conditional
+            # formatting (not static cell fills) so a tier value typed into a
+            # blank cell later colours itself; blanks match no rule -> no fill.
+            for tier_col in ("hartman_tier", "ringer_tier"):
+                t_idx = display_cols.index(tier_col)
+                for tier, fmt in tier_fmts.items():
+                    ws.conditional_format(
+                        1,
+                        t_idx,
+                        n_rows,
+                        t_idx,
+                        {"type": "cell", "criteria": "==", "value": tier, "format": fmt},
+                    )
 
             # Highlight every pick where the config owner's slot is on the clock
             # (+1 because Excel row 0 is the header).
